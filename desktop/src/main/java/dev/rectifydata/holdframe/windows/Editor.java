@@ -2,6 +2,7 @@ package dev.rectifydata.holdframe.windows;
 
 import dev.rectifydata.holdframe.core.Model;
 import dev.rectifydata.holdframe.core.ProjectIO;
+import dev.rectifydata.holdframe.core.ReleaseChecker;
 
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
@@ -122,6 +123,7 @@ public final class Editor extends JFrame {
         defineShortcuts();
         installShortcuts();
         refresh();
+        checkUpdatesOnLaunch();
     }
 
     Model.Project project() { return model; }
@@ -478,6 +480,9 @@ public final class Editor extends JFrame {
         shortcut("Draw tab","control 2",()->featureTabs.setSelectedIndex(1));
         shortcut("Animate tab","control 3",()->featureTabs.setSelectedIndex(2));
         shortcut("Media tab","control 4",()->featureTabs.setSelectedIndex(3));
+        shortcut("Zoom in","control EQUALS",()->stage.zoomBy(1.25f));
+        shortcut("Zoom out","control MINUS",()->stage.zoomBy(.8f));
+        shortcut("Fit canvas","control 0",()->stage.zoomReset());
     }
     private void chooseTool(CanvasView.Tool tool,JToggleButton button) {
         stage.setTool(tool);
@@ -550,6 +555,53 @@ public final class Editor extends JFrame {
             return;
         }
     }
+    private void checkUpdatesOnLaunch() {
+        Preferences prefs=Preferences.userNodeForPackage(Editor.class);
+        if(!prefs.getBoolean("auto_updates",true))return;
+        long now=System.currentTimeMillis(),last=prefs.getLong("last_update_check",0);
+        if(last<=now && now-last<24L*60*60*1000)return;
+        prefs.putLong("last_update_check",now);
+        checkUpdates(false);
+    }
+    private String appVersion() {
+        try(java.io.InputStream input=getClass().getResourceAsStream("/META-INF/holdframe-version.txt")) {
+            if(input!=null)return new String(input.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8).trim();
+        } catch(IOException ignored) {}
+        return "0.9.0";
+    }
+    private void checkUpdates(boolean manual) {
+        if(manual && status!=null)status.setText("Checking GitHub releases...");
+        new SwingWorker<ReleaseChecker.Release,Void>() {
+            private Exception error;
+            @Override protected ReleaseChecker.Release doInBackground(){
+                try {return ReleaseChecker.check();}
+                catch(Exception e){error=e;return null;}
+            }
+            @Override protected void done(){
+                if(!isDisplayable())return;
+                if(error!=null){
+                    if(manual)JOptionPane.showMessageDialog(Editor.this,
+                        "Cannot check for updates: "+error.getMessage(),"HoldFrame Updates",JOptionPane.WARNING_MESSAGE);
+                    refresh();return;
+                }
+                try {
+                    ReleaseChecker.Release release=get();
+                    String current=appVersion();
+                    if(release!=null && release.newerThan(current)){
+                        int choice=JOptionPane.showConfirmDialog(Editor.this,
+                            "HoldFrame "+release.tag+" is available (installed: "+current+").\nOpen the GitHub release page?",
+                            "HoldFrame update available",JOptionPane.YES_NO_OPTION);
+                        if(choice==JOptionPane.YES_OPTION){
+                            try {java.awt.Desktop.getDesktop().browse(java.net.URI.create(release.page));}
+                            catch(Exception ex){JOptionPane.showMessageDialog(Editor.this,release.page);}
+                        }
+                    } else if(manual)JOptionPane.showMessageDialog(Editor.this,
+                        "HoldFrame is up to date ("+current+")","HoldFrame Updates",JOptionPane.INFORMATION_MESSAGE);
+                } catch(Exception e){if(manual)JOptionPane.showMessageDialog(Editor.this,e.toString());}
+                refresh();
+            }
+        }.execute();
+    }
     private JMenuBar buildMenu() {
         JMenuBar bar = new JMenuBar();
         JMenu file = new JMenu("File");
@@ -560,6 +612,7 @@ public final class Editor extends JFrame {
         item(file,"Import image…",this::importImage);
         item(file,"Add audio track…",this::importAudio);
         item(file,"Export animation… (Ctrl+E)",this::exportProject);
+        item(file,"Check for updates…",()->checkUpdates(true));
         item(file,"Exit", () -> { if (confirmSave()) { stopPlayback(); audio.close(); dispose(); }});
         JMenu edit = new JMenu("Edit");
         item(edit,"Undo stroke",this::undo);
@@ -574,13 +627,22 @@ public final class Editor extends JFrame {
         item(edit,"Add blank drawing",()->add(false));
         item(edit,"Duplicate drawing",()->add(true));
         item(edit,"Delete drawing",this::remove);
+        JMenu view = new JMenu("View");
+        item(view,"Zoom in (Ctrl++)",()->stage.zoomBy(1.25f));
+        item(view,"Zoom out (Ctrl+-)",()->stage.zoomBy(.8f));
+        item(view,"Fit canvas (Ctrl+0)",()->stage.zoomReset());
         JMenu settings = new JMenu("Settings");
         item(settings,"Keyboard keymaps…",this::showKeymapDialog);
+        JCheckBoxMenuItem autoUpdates=new JCheckBoxMenuItem("Check for updates automatically",
+            Preferences.userNodeForPackage(Editor.class).getBoolean("auto_updates",true));
+        autoUpdates.addActionListener(e->Preferences.userNodeForPackage(Editor.class)
+            .putBoolean("auto_updates",autoUpdates.isSelected()));
+        settings.add(autoUpdates);
         item(settings,"Restore default keyboard shortcuts",()->{
             for (String key:defaultShortcuts.keySet()) shortcutPrefs.remove(key);
             installShortcuts();
         });
-        bar.add(file); bar.add(edit); bar.add(settings);
+        bar.add(file); bar.add(edit); bar.add(view); bar.add(settings);
         return bar;
     }
     private void item(JMenu menu, String text, Runnable action) {
