@@ -310,6 +310,11 @@ public final class MainActivity extends Activity {
         if(featureTabs!=null && featureTabs.getCheckedRadioButtonId()!=
            featureTabs.getChildAt(activeFeatureTab).getId())
             featureTabs.check(featureTabs.getChildAt(activeFeatureTab).getId());
+        for(int i=0;i<featureTabs.getChildCount();i++) {
+            RadioButton button=(RadioButton)featureTabs.getChildAt(i);
+            button.setTextColor(i==activeFeatureTab?Color.rgb(22,97,174):Color.rgb(40,50,64));
+            button.setBackgroundColor(i==activeFeatureTab?Color.WHITE:Color.rgb(225,232,239));
+        }
         tabActions.removeAllViews();
         switch(activeFeatureTab) {
             case 0:
