@@ -228,7 +228,7 @@ jobs:
           signatures={
               'HoldFrame-Android12-LowRAM.apk':b'PK',
               'HoldFrame-Windows-Setup.exe':b'MZ',
-              'HoldFrame-Linux-amd64.deb':b'!<arch>\\n',
+              'HoldFrame-Linux-amd64.deb':b'!<arch>\n',
           }
           for filename,header in signatures.items():
               with (output/filename).open('rb') as f:
@@ -288,7 +288,7 @@ jobs:
           gh release edit "$tag" --title "HoldFrame $tag (Android / Windows / Linux)" \
             --notes "$notes" --prerelease 2>&1 | tee -a publish.log
           gh release view "$tag" --json assets --jq '.assets[].name' | sort > actual-assets.txt
-          printf '%s\\n' \
+          printf '%s\n' \
             HoldFrame-Android12-LowRAM.apk \
             HoldFrame-Linux-amd64.deb \
             HoldFrame-Windows-Setup.exe > expected-assets.txt
