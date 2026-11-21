@@ -191,3 +191,25 @@ height independently. Double-click to edit the words/font/color. Newly added
 text is automatically selected. Transforms support Ctrl+Z/Ctrl+Y and are saved
 as editable font/text objects in the project (not flattened to image pixels).
 The existing Lasso tool can still transform text alongside images and strokes.
+
+
+### v0.11 editing and splitting
+
+In **Animate**, choose **Split** (or press Ctrl+B) with the playhead inside
+a held drawing. Two exposures share the same source until separately edited;
+overall frame timing and audio remain unchanged. You cannot split at the exact
+start/end of a pose.
+
+**Lasso** now isolates only the sections of vector strokes enclosed by its
+polygon. A stroke crossing the boundary is divided at its intersections; moving
+or deleting a selected section leaves outside sections in place. Select text
+or raster objects by their center and edit them as objects; image content is
+not destructively cropped by the lasso. In **Edit**, choose **Edit selected
+object** or **Delete selected objects** (Delete key). Both lasso segmentation
+and deletion can be undone.
+
+To launch via a normal desktop/application-menu shortcut, open **Settings →
+Create application shortcuts** and choose Desktop and/or Start Menu/Applications.
+For a portable JAR, this copies it to a stable per-user install directory.
+The optional NSIS Windows setup source also provides visible install progress,
+shortcut choices and an optional launch on Finish. No silent installation.
