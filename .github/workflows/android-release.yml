@@ -15,39 +15,45 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - id: java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - uses: gradle/actions/setup-gradle@v4
+      - id: androidsdk
+        uses: android-actions/setup-android@v3
+      - id: gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
       - name: Install and verify Android SDK 35
+        id: sdk
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0'
+          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0' 2>&1 | tee android-sdk-install.log
           test -f "$ANDROID_HOME/platforms/android-35/android.jar"
           test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
           java -version
           gradle --version
       - name: Test shared core
+        id: core
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out
           javac -d out core/src/main/java/dev/rectifydata/holdframe/core/*.java core/src/test/java/dev/rectifydata/holdframe/core/*.java
-          java -cp out dev.rectifydata.holdframe.core.CoreTest
+          java -cp out dev.rectifydata.holdframe.core.CoreTest 2>&1 | tee core-tests.log
           java -cp out dev.rectifydata.holdframe.core.MediaCoreTest
           java -cp out dev.rectifydata.holdframe.core.SequenceClipboardTest
       - name: Memory policy tests and Android 12 minimum
+        id: ram
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p out/ram
           javac -d out/ram app/src/main/java/dev/rectifydata/holdframe/RamProfile.java app/src/test/java/dev/rectifydata/holdframe/RamProfileTest.java
-          java -cp out/ram dev.rectifydata.holdframe.RamProfileTest
+          java -cp out/ram dev.rectifydata.holdframe.RamProfileTest 2>&1 | tee ram-tests.log
           grep -Eq 'minSdk[[:space:]]*=[[:space:]]*31' app/build.gradle.kts
       - name: Compile Android APK (keep full diagnostics)
         id: apk
@@ -57,6 +63,7 @@ jobs:
           gradle --no-daemon --console=plain --stacktrace --warning-mode=all :app:assembleDebug 2>&1 | tee android-build.log
           test -s app/build/outputs/apk/debug/app-debug.apk
       - name: Verify debug APK signing
+        id: sign
         if: steps.apk.outcome == 'success'
         shell: bash
         run: |
@@ -79,12 +86,29 @@ jobs:
             echo "Build: $RUN_URL (attempt $RUN_ATTEMPT)"
             echo "Commit: $GITHUB_SHA"
             echo
-            echo 'Relevant Gradle error lines:'
+            echo 'Step outcomes:'
+            echo '  Java setup: ${{ steps.java.outcome }}'
+            echo '  Android SDK tool setup: ${{ steps.androidsdk.outcome }}'
+            echo '  Gradle setup: ${{ steps.gradle.outcome }}'
+            echo '  Android SDK platform install: ${{ steps.sdk.outcome }}'
+            echo '  Core tests: ${{ steps.core.outcome }}'
+            echo '  RAM policy tests: ${{ steps.ram.outcome }}'
+            echo '  APK compile: ${{ steps.apk.outcome }}'
+            echo '  APK signature: ${{ steps.sign.outcome }}'
+            echo
+            echo 'Relevant diagnostic lines:'
             echo '```text'
             if test -f android-build.log; then
               grep -E -i '(^FAILURE:|^\* What went wrong:|^> Task |error:|could not |failed|not found|exception|unresolved reference)' android-build.log | tail -n 70 | head -c 12000 || true
-            else
-              echo 'No Gradle output found: failure occurred before the APK compile step. See the run URL.'
+            fi
+            for f in android-sdk-install.log core-tests.log ram-tests.log; do
+              if test -f "$f"; then
+                echo "== $f =="
+                tail -n 25 "$f" | head -c 4000
+              fi
+            done
+            if test ! -f android-build.log; then
+              echo 'No Gradle compile output: build failed before compile stage.'
             fi
             echo '```'
           } > android-failure-summary.md
@@ -101,6 +125,10 @@ jobs:
           name: HoldFrame-Android-build-diagnostics-${{ github.run_number }}
           path: |
             android-build.log
+            android-sdk-install.log
+            core-tests.log
+            ram-tests.log
+            android-failure-summary.md
             app/build/reports/
             app/build/outputs/logs/
           if-no-files-found: warn
