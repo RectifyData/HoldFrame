@@ -40,8 +40,9 @@ jobs:
           $sources = @(Get-ChildItem desktop/src/test/java/dev/rectifydata/holdframe/windows -Filter ExportSupportTest.java | ForEach-Object { $_.FullName })
           & javac --release 17 -cp build/classes -d build/export-tests @sources
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & java -Djava.awt.headless=true -cp "build/classes;build/export-tests" dev.rectifydata.holdframe.windows.ExportSupportTest
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & java -Djava.awt.headless=true -cp "build/classes;build/export-tests" dev.rectifydata.holdframe.windows.ExportSupportTest 2>&1 | Tee-Object -FilePath export-tests.log
+          $status = $LASTEXITCODE
+          if ($status -ne 0) { throw "Export tests failed, see export-tests.log, exit code $status" }
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -83,6 +84,11 @@ jobs:
         run: |
           $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
           $message = "Windows release failed at commit $env:GITHUB_SHA. Run: $url. Core=${{ steps.core.outcome }}, Compile=${{ steps.compile.outcome }}, ExportTests=${{ steps.tests.outcome }}, Package=${{ steps.package.outcome }}, Setup=${{ steps.setup.outcome }}."
+          if (Test-Path export-tests.log) {
+            $message += "`n`nLast 70 lines of failing export test:`n```text`n"
+            $message += (Get-Content export-tests.log -Tail 70 | Out-String)
+            $message += "```"
+          }
           & gh issue create --repo "$env:GITHUB_REPOSITORY" --title "HoldFrame Windows build failure" --body "$message"
       - uses: actions/upload-artifact@v4
         with:
