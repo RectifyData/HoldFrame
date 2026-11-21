@@ -167,3 +167,17 @@ Controls are separated into **Project**, **Draw**, **Animate**, and **Media** ta
 The Windows/Linux editor supports persistent, **customizable keyboard keymaps** under Project → Keymaps or Settings → Keyboard keymaps. Every command can be assigned a Java KeyStroke expression such as `control S`, `alt F7`, `SPACE`, `LEFT`, or `control shift A`; duplicate/invalid bindings are rejected. Reset defaults restores the original assignments.
 
 Default shortcuts: Ctrl+S save, Ctrl+O open, Ctrl+Shift+N new, Ctrl+E export, Ctrl+N add pose, Ctrl+D duplicate, Ctrl+C/V copy/paste, Ctrl+Z/Y undo/redo, Ctrl+A select objects, Ctrl+Shift+A select timeline, Ctrl+1–4 change tabs, P/E/L/T select drawing tools, Space play/pause and Left/Right step frames.
+
+
+## Zoom and updates (Windows and Linux)
+
+Canvas zoom: **Ctrl + mouse wheel**, **View → Zoom in/out**, or customize
+the Ctrl+plus, Ctrl+minus and Ctrl+0 shortcuts under **Settings → Keymaps**.
+Pan with the middle mouse button; Fit canvas returns to normal zoom.
+Zoom only changes canvas presentation and doesn't rasterize the source.
+
+Use **File → Check for updates** to query GitHub releases, including
+prereleases. Daily checks are on by default, and can be disabled under
+**Settings → Check for updates automatically**. Updates are user-directed;
+the app opens the official release page and never installs silently.
+The downloadable JAR requires Java 17 or later and runs on Windows/Linux.
