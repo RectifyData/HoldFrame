@@ -97,6 +97,12 @@ jobs:
             adb shell pm path dev.rectifydata.holdframe
             adb shell am start -W -n dev.rectifydata.holdframe/.MainActivity
             sleep 2
+            # An activity can return from am start and then crash immediately.
+            if ! adb shell pidof dev.rectifydata.holdframe; then
+              echo "::error::HoldFrame was not running after the Android 12 launch"
+              adb logcat -d -t 180 | grep -E -A 12 'FATAL EXCEPTION|dev.rectifydata.holdframe' | tail -n 85 || true
+              exit 1
+            fi
             adb shell dumpsys activity activities | grep -E 'dev.rectifydata.holdframe|MainActivity' | head -n 12
       - uses: actions/upload-artifact@v4
         with:
@@ -130,6 +136,7 @@ jobs:
           java -cp build/classes dev.rectifydata.holdframe.core.MediaCoreTest
           java -cp build/classes dev.rectifydata.holdframe.core.SequenceClipboardTest
           java -cp build/classes dev.rectifydata.holdframe.core.ReleaseCheckerTest
+          java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.CanvasZoomTest
           java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.ExportSupportTest
           if ! command -v xvfb-run >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y xvfb; fi
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineAutoScrollTest
