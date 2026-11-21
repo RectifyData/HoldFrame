@@ -181,7 +181,15 @@ jobs:
           pattern: holdframe-build-*
           path: collected
           merge-multiple: false
+      - name: Inspect platform files
+        id: inspect
+        shell: bash
+        run: |
+          set -euo pipefail
+          find collected -type f -printf '%p: %s bytes\n' | sort | tee artifact-layout.txt
+          test "$(find collected -type f | wc -l)" -ge 5
       - name: Assemble one ZIP with all platforms and checksums
+        id: assemble
         shell: bash
         run: |
           set -euo pipefail
@@ -215,8 +223,15 @@ jobs:
           with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6,allowZip64=True) as out:
             for source,destination in required.items():
               file=Path('collected')/source
-              if not file.is_file() or file.stat().st_size<1000:
-                raise RuntimeError(f'Missing or empty platform artifact: {file}')
+              if not file.is_file():
+                # GitHub artifacts may preserve one more source folder level.
+                artifact=Path('collected')/source.split('/')[0]
+                matches=list(artifact.rglob(Path(source).name))
+                if len(matches)!=1:
+                  raise RuntimeError(f'Missing or ambiguous platform artifact: {file}; matches={matches}')
+                file=matches[0]
+              if file.stat().st_size<1000:
+                raise RuntimeError(f'Empty platform artifact: {file}')
               data=file.read_bytes()
               out.writestr(destination,data)
               sums.append(hashlib.sha256(data).hexdigest()+'  '+destination)
@@ -228,6 +243,7 @@ jobs:
           print(f'Created {target} ({target.stat().st_size:,} bytes); all 3 platforms included.')
           PY
       - name: Publish one GitHub tag, one attachment
+        id: publish
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -239,6 +255,28 @@ jobs:
             --title "HoldFrame $tag (Android, Windows, Linux)" \
             --notes "One release, one ZIP attachment with the Android 12+ APK, Windows visible installer and portable app, Linux app with bundled Java, cross-platform JAR, README and checksums. Android timeline now continuously follows playback. Prerelease; physical-device verification pending." \
             --prerelease
+
+      - name: Diagnose unified archive or publication failure
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSPECT: ${{ steps.inspect.outcome }}
+          ASSEMBLE: ${{ steps.assemble.outcome }}
+          PUBLISH: ${{ steps.publish.outcome }}
+        run: |
+          {
+            echo "Unified artifact build failed: inspect=$INSPECT, assemble=$ASSEMBLE, publish=$PUBLISH"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo 'Downloaded artifact files:'
+            if test -f artifact-layout.txt; then cat artifact-layout.txt; else find collected -maxdepth 4 -type f -print 2>/dev/null || true; fi
+            echo
+            echo 'Generated ZIP files:'
+            ls -lh release/*.zip 2>/dev/null || true
+          } > unified-error.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "HoldFrame combined release packaging failure ($GITHUB_RUN_NUMBER)" --body-file unified-error.md
 
   report-build-failure:
     needs: [android, windows, linux, unified-release]
