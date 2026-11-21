@@ -242,7 +242,7 @@ jobs:
             assert len(verify.namelist())==7
           print(f'Created {target} ({target.stat().st_size:,} bytes); all 3 platforms included.')
           PY
-      - name: Publish one GitHub tag, one attachment
+      - name: Publish one GitHub tag and one combined attachment
         id: publish
         shell: bash
         env:
@@ -251,11 +251,25 @@ jobs:
           set -euo pipefail
           tag="v0.8.${{ github.run_number }}"
           asset="release/HoldFrame-$tag-All-Platforms.zip"
-          gh release create "$tag" "$asset" --target "$GITHUB_SHA" \
-            --title "HoldFrame $tag (Android, Windows, Linux)" \
-            --notes "One release, one ZIP attachment with the Android 12+ APK, Windows visible installer and portable app, Linux app with bundled Java, cross-platform JAR, README and checksums. Android timeline now continuously follows playback. Prerelease; physical-device verification pending." \
-            --prerelease
-
+          test -s "$asset"
+          # Create metadata separately, so a temporary large-file upload failure
+          # does not force another release or a second tag.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" \
+              --title "HoldFrame $tag (Android, Windows, Linux)" \
+              --notes "One prerelease, one ZIP containing Android 12+ APK, interactive Windows installer, Windows portable app, Java JAR, bundled-runtime Linux app, checksums and README. Android timeline follow-scrolling fixed. Physical-device testing is pending." \
+              --prerelease 2>&1 | tee publish.log
+          fi
+          for attempt in 1 2 3; do
+            if gh release upload "$tag" "$asset" --clobber 2>&1 | tee -a publish.log; then
+              echo "Uploaded the single combined release attachment."
+              exit 0
+            fi
+            echo "Upload attempt $attempt failed" | tee -a publish.log
+            sleep 5
+          done
+          echo "::error::Combined release upload failed; see publish.log."
+          exit 1
       - name: Diagnose unified archive or publication failure
         if: failure()
         continue-on-error: true
@@ -275,6 +289,9 @@ jobs:
             echo
             echo 'Generated ZIP files:'
             ls -lh release/*.zip 2>/dev/null || true
+            echo
+            echo 'GitHub release API response:'
+            if test -f publish.log; then tail -n 100 publish.log; else echo 'No publish.log (failure before release creation).'; fi
           } > unified-error.md
           gh issue create --repo "$GITHUB_REPOSITORY" --title "HoldFrame combined release packaging failure ($GITHUB_RUN_NUMBER)" --body-file unified-error.md
 
