@@ -47,13 +47,14 @@ jobs:
           java -cp build/release-tests dev.rectifydata.holdframe.core.ReleaseCheckerTest
           java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformMathTest
           java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformProjectTest
+          java -cp build/release-tests dev.rectifydata.holdframe.core.SplitExposureTest
       - name: Build and sign Android APK
         id: apk
         shell: bash
         run: |
           set -euo pipefail
           gradle --no-daemon --console=plain :app:assembleDebug \
-            -PreleaseVersion="0.10.$GITHUB_RUN_NUMBER" \
+            -PreleaseVersion="0.11.$GITHUB_RUN_NUMBER" \
             -PbuildNumber="$((9000 + GITHUB_RUN_NUMBER))" 2>&1 | tee android-build.log
           test -s app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
@@ -187,6 +188,9 @@ jobs:
           java -cp build/classes dev.rectifydata.holdframe.core.ReleaseCheckerTest
           java -cp build/classes dev.rectifydata.holdframe.core.TextTransformMathTest
           java -cp build/classes dev.rectifydata.holdframe.core.TextTransformProjectTest
+          java -cp build/classes dev.rectifydata.holdframe.core.SplitExposureTest
+          java -cp build/classes dev.rectifydata.holdframe.windows.LassoPartialTest
+          java -cp build/classes dev.rectifydata.holdframe.windows.ShortcutSupportTest
           java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.CanvasZoomTest
           java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.ExportSupportTest
           if ! command -v xvfb-run >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y xvfb; fi
@@ -194,15 +198,16 @@ jobs:
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineDragAndLayoutTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.FeatureTabsAndKeymapTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.DirectTextTransformTest
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.LassoPartialGuiTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TextAndFourHandleTest
       - name: Stage Java executable
         run: |
           mkdir -p release
           cp dist/HoldFrame.jar release/HoldFrame-Desktop.jar
           mkdir -p build/version-meta/META-INF
-          printf '0.10.%s\n' "$GITHUB_RUN_NUMBER" > build/version-meta/META-INF/holdframe-version.txt
+          printf '0.11.%s\n' "$GITHUB_RUN_NUMBER" > build/version-meta/META-INF/holdframe-version.txt
           jar --update --file release/HoldFrame-Desktop.jar -C build/version-meta META-INF/holdframe-version.txt
-          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -q "^0.10.$GITHUB_RUN_NUMBER$"
+          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -q "^0.11.$GITHUB_RUN_NUMBER$"
       - uses: actions/upload-artifact@v4
         with:
           name: holdframe-build-java
@@ -263,8 +268,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          tag="v0.10.${{ github.run_number }}"
-          notes="HoldFrame editable text transform: tap-to-select and drag-to-move on Android and Java desktop; resize through all four handles with opposite corners anchored, reversible undo/redo and HFM4 project saving. Retains zoom and GitHub updater. Exactly two attachments: Android 12+ APK and executable Java 17+ JAR for Windows/Linux. Experimental prerelease; Android emulator installation and launch are CI-gated. Back up before replacing debug-signed APKs; physical testing pending."
+          tag="v0.11.${{ github.run_number }}"
+          notes="HoldFrame: Split at Playhead (Ctrl+B / Animate tab), vector-accurate lasso selection, undoable Edit/Delete of selected objects, Android text deletion, four-corner text transforms, Windows/Linux shortcut creation and existing canvas zoom/updater. Exactly two attachments: Android 12+ experimental APK and executable Java 17+ JAR for Windows/Linux. Debug APK may require backing up app data before reinstalling; device testing is still recommended."
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --target "$GITHUB_SHA" \
               --title "HoldFrame $tag (Android APK + Java JAR)" \
