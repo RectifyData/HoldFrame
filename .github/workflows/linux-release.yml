@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  issues: write
 jobs:
   linux:
     runs-on: ubuntu-latest
@@ -15,14 +16,17 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Build Java desktop app
+        id: compile
         run: bash build.sh
       - name: Test core
+        id: core
         run: |
           javac --release 17 -cp build/classes -d build/classes core/src/test/java/dev/rectifydata/holdframe/core/*.java
           java -cp build/classes dev.rectifydata.holdframe.core.CoreTest
           java -cp build/classes dev.rectifydata.holdframe.core.MediaCoreTest
           java -cp build/classes dev.rectifydata.holdframe.core.SequenceClipboardTest
       - name: Test lasso math and live Swing interface
+        id: tests
         run: |
           javac --release 17 -cp build/classes -d build/classes desktop/src/test/java/dev/rectifydata/holdframe/windows/*.java
           java -cp build/classes dev.rectifydata.holdframe.windows.LassoTest
@@ -42,6 +46,7 @@ jobs:
           python3 -m pip install pillow
           python3 tools/generate_icon.py
       - name: Package portable Linux app with included runtime
+        id: package
         run: |
           mkdir -p release
           jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar \
@@ -49,6 +54,14 @@ jobs:
             --app-version "0.5.${{ github.run_number }}" --vendor RectifyData
           tar -C packaged -czf release/HoldFrame-Linux-portable.tar.gz HoldFrame
           cp dist/HoldFrame.jar release/HoldFrame-cross-platform.jar
+      - name: Report failed Linux build
+        if: failure()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "HoldFrame Linux build failure" \
+            --body "Linux release failed at commit $GITHUB_SHA. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Compile=${{ steps.compile.outcome }}, Core=${{ steps.core.outcome }}, GUI=${{ steps.tests.outcome }}, Package=${{ steps.package.outcome }}."
       - uses: actions/upload-artifact@v4
         with:
           name: HoldFrame-Linux

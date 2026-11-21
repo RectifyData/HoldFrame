@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  issues: write
 jobs:
   windows:
     runs-on: windows-latest
@@ -15,6 +16,7 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Run shared core tests
+        id: core
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build/tests | Out-Null
@@ -27,9 +29,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Compile Windows app
+        id: compile
         shell: pwsh
         run: ./build.ps1
       - name: Run export tests
+        id: tests
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build/export-tests | Out-Null
@@ -47,6 +51,7 @@ jobs:
           python -m pip install pillow
           python tools/generate_icon.py
       - name: Package Windows application with included Java runtime
+        id: package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
@@ -60,6 +65,7 @@ jobs:
           if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress }
           if (-not (Test-Path $nsis)) { throw "NSIS not found" }
       - name: Build visible Windows setup
+        id: setup
         shell: pwsh
         run: |
           $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -68,6 +74,16 @@ jobs:
           $status = $LASTEXITCODE
           Pop-Location
           if ($status -ne 0) { exit $status }
+      - name: Report failed Windows build
+        if: failure()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $message = "Windows release failed at commit $env:GITHUB_SHA. Run: $url. Core=${{ steps.core.outcome }}, Compile=${{ steps.compile.outcome }}, ExportTests=${{ steps.tests.outcome }}, Package=${{ steps.package.outcome }}, Setup=${{ steps.setup.outcome }}."
+          & gh issue create --repo "$env:GITHUB_REPOSITORY" --title "HoldFrame Windows build failure" --body "$message"
       - uses: actions/upload-artifact@v4
         with:
           name: HoldFrame-Windows
