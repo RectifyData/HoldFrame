@@ -1,0 +1,10 @@
+out/
+build/
+dist/
+release/
+.gradle/
+*.class
+*.holdframe
+
+# Build outputs
+*.jar
