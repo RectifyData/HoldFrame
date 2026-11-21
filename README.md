@@ -42,3 +42,24 @@ java -cp out/core dev.rectifydata.holdframe.core.SequenceClipboardTest
 
 Build and UI instructions are in the respective platform branches. Shared core
 changes should be made on `main` first and then brought into both app branches.
+
+
+## v0.11 — precise split and selection, desktop shortcuts
+
+**Split at Playhead:** On Android, use Animate → More → Split at playhead or
+Ctrl+B with a hardware keyboard. On Windows/Linux, use Animate → Split or
+Ctrl+B (remappable). A split retains the same total duration and the same
+absolute audio timing; the two halves use copy-on-write drawings so changing
+one doesn't modify the other.
+
+**Lasso scope (desktop):** strokes that pass through the lasso boundary are
+split at the vector polygon intersections. Dragging/resizing/deleting the
+selected part leaves the outside pieces alone. Edit → Delete selected objects
+and Edit → Edit selected object support scoped edits, with undo/redo. Android
+supports editing/removing its selected text objects through Media → More.
+
+**Launch and shortcuts:** The Java 17+ JAR is directly executable using
+\`java -jar HoldFrame-Desktop.jar\`. Under Settings → Create application
+shortcuts, users choose Desktop or Start Menu/Applications. The optional
+Windows NSIS installer source includes a visible wizard, selectable
+shortcuts, and optional launch on completion. No silent installation.
