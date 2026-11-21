@@ -25,6 +25,7 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Set up preinstalled Android SDK
+        id: sdk
         shell: bash
         run: |
           set -euo pipefail
@@ -33,6 +34,7 @@ jobs:
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" --install 'platforms;android-35' 'build-tools;35.0.0'
       - name: Validate Android 12 minimum and scroll policy
+        id: validate
         run: |
           set -euo pipefail
           grep -Eq 'minSdk[[:space:]]*=[[:space:]]*31' app/build.gradle.kts
@@ -46,12 +48,13 @@ jobs:
           java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformMathTest
           java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformProjectTest
       - name: Build and sign Android APK
+        id: apk
         shell: bash
         run: |
           set -euo pipefail
           gradle --no-daemon --console=plain :app:assembleDebug \
             -PreleaseVersion="0.10.$GITHUB_RUN_NUMBER" \
-            -PbuildNumber="$((9000 + GITHUB_RUN_NUMBER))"
+            -PbuildNumber="$((9000 + GITHUB_RUN_NUMBER))" 2>&1 | tee android-build.log
           test -s app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 app/build/outputs/apk/debug/app-debug.apk
@@ -62,6 +65,7 @@ jobs:
           mkdir -p release
           cp app/build/outputs/apk/debug/app-debug.apk release/HoldFrame-Android12-LowRAM.apk
       - name: Compare previous-release signing identity
+        id: cert
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -80,11 +84,13 @@ jobs:
             fi
           fi
       - name: Enable KVM acceleration for Android emulator
+        id: kvm
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Fresh install and launch on Android 12 emulator
+        id: emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 31
@@ -106,6 +112,47 @@ jobs:
               exit 1
             fi
             adb shell dumpsys activity activities | grep -E 'dev.rectifydata.holdframe|MainActivity' | head -n 12
+      - name: Report exact Android CI failure with build diagnostics
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SDK_STEP: ${{ steps.sdk.outcome }}
+          VALIDATE_STEP: ${{ steps.validate.outcome }}
+          APK_STEP: ${{ steps.apk.outcome }}
+          CERT_STEP: ${{ steps.cert.outcome }}
+          KVM_STEP: ${{ steps.kvm.outcome }}
+          EMULATOR_STEP: ${{ steps.emulator.outcome }}
+        run: |
+          {
+            echo "HoldFrame Android build failure (run $GITHUB_RUN_NUMBER)"
+            echo "Steps: SDK=$SDK_STEP; validate=$VALIDATE_STEP; APK=$APK_STEP; cert=$CERT_STEP; KVM=$KVM_STEP; emulator=$EMULATOR_STEP"
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo 'Gradle compiler diagnostic:'
+            echo '~~' '~~' 'text'
+            if test -f android-build.log; then
+              grep -Ei -A 5 'error:|^FAILURE:|^\* What went wrong|^> Task .*FAILED|cannot find symbol|unresolved reference|execution failed|does not exist' android-build.log | tail -n 100 | head -c 16000 || true
+            else
+              echo 'No Gradle compile log; failure occurred before the APK step.'
+            fi
+            echo '~~' '~~'
+            echo 'APK size:'
+            ls -lh app/build/outputs/apk/debug/*.apk 2>/dev/null || true
+          } > android-failure.md
+          gh issue create -R "$GH_REPO" --title "HoldFrame Android error details ($GITHUB_RUN_NUMBER)" --body-file android-failure.md
+      - name: Upload Android failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HoldFrame-Android-failure-${{ github.run_number }}
+          path: |
+            android-build.log
+            android-failure.md
+            app/build/reports/
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: holdframe-build-android
