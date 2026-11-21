@@ -83,3 +83,12 @@ until it passes an Android SDK build and device test.
 **Testing:** `RamProfileTest` is a pure-Java regression test for automatic RAM
 thresholds, manual overrides and resource budgets. The GitHub Actions Android
 workflow compiles the APK on SDK 35 and uploads a debug-signed experimental build.
+
+
+## Feature tabs and hardware keymaps (v0.7)
+
+File, Draw, Animate, and Media tabs replace the crowded scrolling toolbar, while the drawing canvas and timeline stay visible. The floating pen/tools button remains available.
+
+Automatic timeline following reveals the current frame during playback, frame stepping, and seek. Dragging an exposure's edge toward the left or right edge of the screen scrolls continuously while held; audio-lane swipes remain available for manual scrolling.
+
+Physical keyboard: Ctrl+1–4 chooses a tab; Ctrl+S/O/N saves/opens/creates a project; Ctrl+C/V copies/pastes; Ctrl+D duplicates; Ctrl+Z/Y undo/redo; Space plays; and Left/Right steps a frame. File → More → Keyboard keymaps chooses the Standard or Animation preset (J add pose, K duplicate, L play, brackets frame-step). The choice persists.

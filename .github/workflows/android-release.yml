@@ -163,10 +163,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="android-v0.6.${{ github.run_number }}-r${{ github.run_attempt }}"
+          tag="android-v0.7.${{ github.run_number }}-r${{ github.run_attempt }}"
           gh release create "$tag" \
             app/build/outputs/apk/debug/app-debug.apk \
             --target "$GITHUB_SHA" \
-            --title "HoldFrame Android 12 Low RAM preview ${{ github.run_number }}" \
-            --notes "Android 12+ (minimum API 31). Automatic Low RAM mode for devices with 6 GiB RAM or less; settings include Auto/On/Off. Debug-signed testing APK, not yet validated on a physical phone." \
+            --title "HoldFrame Android 12 tabs and keymaps preview ${{ github.run_number }}" \
+            --notes "Android 12+ (minimum API 31). Feature tabs (File/Draw/Animate/Media), Android timeline follow-scroll, hardware keyboard keymap presets, and automatic Low RAM mode on devices with <=6 GiB. Debug-signed testing APK, not yet validated on a physical phone." \
             --prerelease
