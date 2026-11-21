@@ -144,6 +144,89 @@ public final class Editor extends JFrame {
         markDirty();
         refresh();
     }
+    /** Undoable isolation of only the crossed part of each lassoed vector stroke. */
+    void lassoStrokePartition(List<Model.Stroke> before,List<Model.Stroke> after) {
+        Model.Drawing drawing=model.drawingAt(selected);
+        recordEdit(drawing.id,new Edit() {
+            public void undo() {drawing.strokes.clear();drawing.strokes.addAll(before);}
+            public void redo() {drawing.strokes.clear();drawing.strokes.addAll(after);}
+        });
+        stage.invalidateDrawing();
+    }
+    private static <T> void removeIndexes(List<T> data,List<Integer> indexes) {
+        indexes.sort(java.util.Comparator.reverseOrder());
+        for(int at:indexes)if(at>=0&&at<data.size())data.remove(at);
+    }
+    private void deleteSelectedObjects() {
+        stopPlayback();
+        List<Integer> strokes=stage.selectedStrokeIndexes();
+        List<Integer> texts=stage.selectedTextIndexes();
+        List<Integer> images=stage.selectedImageIndexes();
+        if(strokes.isEmpty()&&texts.isEmpty()&&images.isEmpty()) {
+            status.setText("Select drawing content with Lasso or Text before deleting");return;
+        }
+        prepareDrawing();
+        Model.Drawing drawing=model.drawingAt(selected);
+        List<Model.Stroke> oldStrokes=new ArrayList<>(drawing.strokes);
+        List<Model.TextItem> oldTexts=new ArrayList<>(drawing.texts);
+        List<Model.ImageItem> oldImages=new ArrayList<>(drawing.images);
+        removeIndexes(drawing.strokes,strokes);
+        removeIndexes(drawing.texts,texts);
+        removeIndexes(drawing.images,images);
+        List<Model.Stroke> newStrokes=new ArrayList<>(drawing.strokes);
+        List<Model.TextItem> newTexts=new ArrayList<>(drawing.texts);
+        List<Model.ImageItem> newImages=new ArrayList<>(drawing.images);
+        recordEdit(drawing.id,new Edit() {
+            public void undo() {
+                drawing.strokes.clear();drawing.strokes.addAll(oldStrokes);
+                drawing.texts.clear();drawing.texts.addAll(oldTexts);
+                drawing.images.clear();drawing.images.addAll(oldImages);
+            }
+            public void redo() {
+                drawing.strokes.clear();drawing.strokes.addAll(newStrokes);
+                drawing.texts.clear();drawing.texts.addAll(newTexts);
+                drawing.images.clear();drawing.images.addAll(newImages);
+            }
+        });
+        stage.clearSelection();stage.invalidateDrawing();
+    }
+    private void editSelectedObject() {
+        List<Integer> texts=stage.selectedTextIndexes();
+        if(!texts.isEmpty()) {editTextAt(texts.get(0));return;}
+        List<Integer> images=stage.selectedImageIndexes();
+        if(!images.isEmpty()) {
+            int index=images.get(0);
+            Model.ImageItem item=model.drawingAt(selected).images.get(index);
+            JPanel controls=new JPanel(new GridLayout(4,2,6,6));
+            JSpinner x=new JSpinner(new SpinnerNumberModel((double)item.x,-100000,100000,1));
+            JSpinner y=new JSpinner(new SpinnerNumberModel((double)item.y,-100000,100000,1));
+            JSpinner w=new JSpinner(new SpinnerNumberModel((double)item.width,.01,100000,1));
+            JSpinner h=new JSpinner(new SpinnerNumberModel((double)item.height,.01,100000,1));
+            controls.add(new JLabel("X"));controls.add(x);
+            controls.add(new JLabel("Y"));controls.add(y);
+            controls.add(new JLabel("Width"));controls.add(w);
+            controls.add(new JLabel("Height"));controls.add(h);
+            if(JOptionPane.showConfirmDialog(this,controls,"Edit selected image",
+                JOptionPane.OK_CANCEL_OPTION)==JOptionPane.OK_OPTION) {
+                prepareDrawing();
+                Model.Drawing pose=model.drawingAt(selected);
+                Model.ImageItem edited=pose.images.get(index);
+                Model.ImageItem before=edited.copy();
+                edited.x=((Number)x.getValue()).floatValue();
+                edited.y=((Number)y.getValue()).floatValue();
+                edited.width=((Number)w.getValue()).floatValue();
+                edited.height=((Number)h.getValue()).floatValue();
+                Model.ImageItem after=edited.copy();
+                recordEdit(pose.id,new Edit() {
+                    public void undo(){edited.assign(before);}
+                    public void redo(){edited.assign(after);}
+                });
+                stage.clearSelection();stage.invalidateDrawing();
+            }
+            return;
+        }
+        status.setText("Select text or an image to edit. Use Lasso handles to transform strokes.");
+    }
     void strokeAdded(Model.Stroke stroke) {
         Model.Drawing drawing = model.drawingAt(selected);
         recordEdit(drawing.id,new Edit() {
@@ -465,6 +548,7 @@ public final class Editor extends JFrame {
         shortcut("Undo","control Z",this::undo);
         shortcut("Redo","control Y",this::redo);
         shortcut("Select objects","control A",this::selectAll);
+        shortcut("Delete selected objects","DELETE",this::deleteSelectedObjects);
         shortcut("Select timeline","control shift A",this::selectAllTimeline);
         shortcut("Copy poses","control C",this::copyFrame);
         shortcut("Paste poses","control V",this::pasteFrame);
@@ -493,7 +577,7 @@ public final class Editor extends JFrame {
     }
     private static boolean shortcutReservedByTextEditor(String action) {
         return action.equals("Copy poses") || action.equals("Paste poses") ||
-            action.equals("Select objects") || action.equals("Undo") || action.equals("Redo") ||
+            action.equals("Select objects") || action.equals("Delete selected objects") || action.equals("Undo") || action.equals("Redo") ||
             action.equals("Next frame") || action.equals("Previous frame") ||
             action.equals("Play / Pause") || action.endsWith(" tool");
     }
@@ -621,6 +705,8 @@ public final class Editor extends JFrame {
         item(edit,"Redo",this::redo);
         item(edit,"Select all objects (Ctrl+A)",this::selectAll);
         item(edit,"Add editable text…",()->addTextAt(new Model.Point(180,150)));
+        item(edit,"Edit selected object…",this::editSelectedObject);
+        item(edit,"Delete selected objects (Del)",this::deleteSelectedObjects);
         item(edit,"Import image…",this::importImage);
         item(edit,"Delete selected audio clip",this::deleteAudio);
         item(edit,"Copy selected poses (Ctrl+C)",this::copyFrame);

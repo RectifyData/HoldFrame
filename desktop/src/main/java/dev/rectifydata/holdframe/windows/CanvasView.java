@@ -186,11 +186,31 @@ final class CanvasView extends JComponent {
                     invalidateDrawing();
                 } else if (drag == Drag.SELECT) {
                     if (lasso.size()>2) {
-                        selection.addAll(LassoMath.inside(editor.project().drawingAt(editor.selected()).strokes,lasso));
+                        // Segment crossed strokes at the boundary so movement/deletion
+                        // affects only the enclosed vector portions, not the whole stroke.
+                        editor.prepareDrawing();
+                        Model.Drawing pose=editor.project().drawingAt(editor.selected());
+                        List<Model.Stroke> before=new ArrayList<>(pose.strokes);
+                        List<Model.Stroke> pieces=new ArrayList<>();
+                        boolean separated=false;
+                        for (Model.Stroke stroke:before) {
+                            List<LassoMath.Piece> regions=LassoMath.partition(stroke,lasso);
+                            if(regions.size()>1) separated=true;
+                            for(LassoMath.Piece part:regions) {
+                                pieces.add(part.stroke);
+                                if(part.selected)selection.add(part.stroke);
+                            }
+                        }
+                        if(separated) {
+                            pose.strokes.clear();
+                            pose.strokes.addAll(pieces);
+                            editor.lassoStrokePartition(before,new ArrayList<>(pieces));
+                            invalidateDrawing();
+                        }
                         Path2D.Float polygon=lassoPath();
                         for (Model.TextItem text : editor.project().drawingAt(editor.selected()).texts) {
                             Rectangle2D.Float rect=FontSupport.bounds(text);
-                            if (polygon.intersects(rect) || polygon.contains(rect.getCenterX(),rect.getCenterY()))
+                            if (polygon.contains(rect.getCenterX(),rect.getCenterY()))
                                 selectedTexts.add(text);
                         }
                         for (Model.ImageItem image : editor.project().drawingAt(editor.selected()).images) {
@@ -259,6 +279,25 @@ final class CanvasView extends JComponent {
     void setPreviousOnion(boolean visible) { previousOnion=visible; repaint(); }
     void setNextOnion(boolean visible) { nextOnion=visible; repaint(); }
     boolean isOnion() { return onion; }
+    /** Capture selected-object indexes before the drawing is detached on write. */
+    List<Integer> selectedStrokeIndexes() {
+        List<Integer> out=new ArrayList<>();
+        List<Model.Stroke> all=editor.project().drawingAt(editor.selected()).strokes;
+        for(Model.Stroke x:selection) {int i=all.indexOf(x);if(i>=0)out.add(i);}
+        return out;
+    }
+    List<Integer> selectedTextIndexes() {
+        List<Integer> out=new ArrayList<>();
+        List<Model.TextItem> all=editor.project().drawingAt(editor.selected()).texts;
+        for(Model.TextItem x:selectedTexts) {int i=all.indexOf(x);if(i>=0)out.add(i);}
+        return out;
+    }
+    List<Integer> selectedImageIndexes() {
+        List<Integer> out=new ArrayList<>();
+        List<Model.ImageItem> all=editor.project().drawingAt(editor.selected()).images;
+        for(Model.ImageItem x:selectedImages) {int i=all.indexOf(x);if(i>=0)out.add(i);}
+        return out;
+    }
     void clearSelection() {
         selection.clear(); selectedTexts.clear(); selectedImages.clear(); lasso.clear();
         originalPositions=null; originalWidths=null; originalTexts=null; originalImages=null;
