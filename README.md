@@ -1,6 +1,85 @@
-# HoldFrame
+# HoldFrame — Android branch
 
-A compact, exposure-based drawing animation editor. Draw once, stretch the exposure on a timeline, and animate without generating duplicate frames.
+Native Android drawing and exposure-timeline editor, sharing the platform-neutral
+Java model and compressed `.holdframe` files from `main`.
 
-Development branches:
-- `windows` — native Windows desktop editor.
+Designed for devices with limited RAM: only the current pose uses a persistent
+render bitmap (600×338 in Low RAM mode or 800×450 normally). Animated holds are timeline references, not image duplicates.
+
+## Features
+
+- Draw, erase, duplicate, delete, and extend drawings like video-editor clips.
+- **Copy/Paste poses** from the toolbar or floating palette; keyboard Ctrl+C/V works
+  with a connected keyboard. **Copy range** accepts a first and last pose number;
+  the entire ordered sequence is pasted with its original exposure durations.
+  Repeated pastes share frozen pose data until one is edited (copy-on-write).
+- **Onion skin previews:** enable through the floating Tools menu. The previous
+  drawing is red and the next is blue. Disabled by default to conserve memory.
+  Ghosts use transient vector layers so no extra long-lived frame bitmaps are stored.
+- Undo/redo is isolated per pose and does not alter copied sibling poses.
+- Time-based playback and a low-overhead exposure timeline.
+- Editable autosave and standard Android document open/save.
+
+## Build
+
+GitHub Actions builds a debug APK using Android SDK 35 / Gradle 8.9 and publishes a
+**prerelease**, never treating an unverified preview as tested for all devices.
+The shared model tests run before APK compilation.
+
+The `windows` branch contains the desktop Swing editor for Windows and Linux.
+Desktop adds lasso move/scale; it is not a feature of the Android app in this branch.
+
+
+## HFM4 images, sound, and pose sequences
+
+- **+ Image** imports PNG/JPEG/GIF/BMP using Android's document picker. Original
+  compressed bytes stay in the project only once, even across multiple poses.
+  The canvas decodes a downsampled preview on demand to conserve RAM. The floating
+  Tools menu offers numeric image placement/resize.
+- **+ Audio** imports into app-private storage (60 MB limit), then plays compressed
+  sound through Android MediaPlayer when the playhead enters the audio clip.
+  Only one simultaneous sound is active in this low-RAM version. External audio
+  files are not embedded in `.holdframe` projects; imported audio remains on
+  the original device unless exported separately.
+- **Copy range** copies contiguous poses chosen by number, with optional Android
+  hardware-keyboard Ctrl+C/V for one pose or the selected range. The selected
+  range is highlighted on the compact timeline.
+- Desktop/Android HFM4 files include vector strokes, editable text, raster image
+  assets and external audio references. HFM1–HFM3 remain readable.
+
+**Build status:** Android APK compilation and device testing are still unverified
+in this environment. Do not replace a stable daily-driver app solely with this
+source-level preview.
+
+## HFM2 text compatibility
+
+The shared engine now reads editable text objects saved by the desktop app, and
+the Android canvas renders them using Android system fonts or a user-imported local
+font. The toolbar has **+ Text**, and the floating menu offers editing existing text
+and importing local TTF/OTF fonts. Imported fonts stay in the app's private storage;
+font binaries are never embedded in projects or included in source releases.
+Older HFM1 projects remain readable. This Android change is source-level only
+until it passes an Android SDK build and device test.
+
+## Android 12+ and Low RAM Settings (v0.6.0 preview)
+
+- **Minimum Android version: 12 (API 31)**; compile/target SDK 35. Native
+  platform Android 12 SplashScreen API is used for launch. Android 11 or older
+  cannot install the APK.
+- Open **Settings → Memory** (or floating **Tools → Settings / Low RAM mode**).
+  Choose **Automatic**, **Always on**, or **Always off**. The choice persists.
+- **Automatic** detects physical RAM using ActivityManager.MemoryInfo and enables
+  Low RAM mode when reported total RAM is **at or below 6 GiB**; failure to read
+  physical RAM errs on the conservative side. Users may override this at any time.
+- In Low RAM mode, only a scaled raster cache is allocated (~0.77 MiB instead
+  of ~1.37 MiB); the saved 800×450 canvas/vector geometry remains unchanged.
+  Imported JPEG previews decode at most 768 px and use RGB565 (PNG transparency
+  is preserved). Onion previews default off, and when switched on render only the
+  previous ghost. Undo histories retain 12 strokes/pose instead of 60. Playback
+  redraw and autosave are throttled. Imported image limits are reduced.
+- Android trims memory by dropping decoded-image, font and stage raster caches
+  without dropping project data. The raster is lazily rebuilt.
+
+**Testing:** `RamProfileTest` is a pure-Java regression test for automatic RAM
+thresholds, manual overrides and resource budgets. The GitHub Actions Android
+workflow compiles the APK on SDK 35 and uploads a debug-signed experimental build.

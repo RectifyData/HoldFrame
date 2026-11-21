@@ -1,0 +1,52 @@
+name: HoldFrame Android prerelease
+on:
+  push:
+    branches: [android]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Test shared core
+        run: |
+          mkdir -p out
+          javac -d out core/src/main/java/dev/rectifydata/holdframe/core/*.java core/src/test/java/dev/rectifydata/holdframe/core/*.java
+          java -cp out dev.rectifydata.holdframe.core.CoreTest
+          java -cp out dev.rectifydata.holdframe.core.MediaCoreTest
+          java -cp out dev.rectifydata.holdframe.core.SequenceClipboardTest
+      - name: Memory policy regression tests
+        run: |
+          mkdir -p out/ram
+          javac -d out/ram app/src/main/java/dev/rectifydata/holdframe/RamProfile.java app/src/test/java/dev/rectifydata/holdframe/RamProfileTest.java
+          java -cp out/ram dev.rectifydata.holdframe.RamProfileTest
+      - name: Verify minimum API 31
+        run: grep -q 'minSdk = 31' app/build.gradle.kts
+      - name: Compile Android APK
+        run: gradle --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HoldFrame-Android
+          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "android-v0.6.${{ github.run_number }}" \
+            app/build/outputs/apk/debug/app-debug.apk \
+            --target "$GITHUB_SHA" \
+            --title "HoldFrame Android preview ${{ github.run_number }}" \
+            --notes "Android 12+ (API 31). Low RAM mode Auto/On/Off defaults on for up to 6 GiB physical RAM. Conservative canvas, bitmap decoding, onion previews, history and playback. Debug-signed experimental APK." \
+            --prerelease

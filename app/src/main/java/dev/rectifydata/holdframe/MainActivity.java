@@ -1,0 +1,914 @@
+package dev.rectifydata.holdframe;
+
+import android.app.Activity;
+import android.app.ActivityManager;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.graphics.Color;
+import android.graphics.BitmapFactory;
+import android.media.MediaMetadataRetriever;
+import android.media.MediaPlayer;
+import android.net.Uri;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.CheckBox;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
+import android.text.InputType;
+import android.database.Cursor;
+import android.provider.OpenableColumns;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.PopupMenu;
+import android.widget.SeekBar;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import dev.rectifydata.holdframe.core.Model;
+import dev.rectifydata.holdframe.core.ProjectIO;
+
+import java.io.File;
+import java.io.ByteArrayOutputStream;
+import java.security.MessageDigest;
+import java.util.UUID;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.Map;
+
+/** Lightweight native Android editor; no WebView, media encoder or per-frame bitmaps. */
+public final class MainActivity extends Activity {
+    private static final int CREATE_DOCUMENT = 100;
+    private static final int OPEN_DOCUMENT = 101;
+    private static final int IMPORT_FONT = 102;
+    private static final int IMPORT_IMAGE = 103;
+    private static final int IMPORT_AUDIO = 104;
+    private static final String SETTINGS_PREFS = "holdframe_settings";
+    private static final String LOW_RAM_PREFERENCE = "low_ram_preference";
+    private long physicalRamBytes;
+    private int lowRamPreference = RamProfile.AUTO;
+    private boolean lowRamEnabled;
+    private MediaPlayer audioPlayer;
+    private String playingAudioId;
+    private String importedFontPath = "";
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Map<String, Deque<Model.Stroke>> redos = new HashMap<>();
+    private final Map<String, Deque<Model.Stroke>> undos = new HashMap<>();
+    private Model.ClipboardSequence clipboard;
+    private int selectedFrom=-1, selectedTo=-1;
+    private Model.Project model = new Model.Project();
+    private DrawingView canvas;
+    private TimelineView timeline;
+    private TextView status;
+    private Button playButton;
+    private int selected, currentFrame;
+    private boolean playing;
+    private long playbackOriginNanos;
+    private int playbackOriginFrame;
+    private Uri documentUri;
+    private Runnable autosaveJob;
+    private final Runnable playback = new Runnable() {
+        @Override public void run() {
+            if (!playing) return;
+            long advances=(System.nanoTime()-playbackOriginNanos)*model.fps/1_000_000_000L;
+            seek((int)((playbackOriginFrame+advances)%model.totalFrames()));
+            syncAudio();
+            handler.postDelayed(this,RamProfile.playbackRefreshMs(lowRamEnabled));
+        }
+    };
+
+    Model.Project project() { return model; }
+    int selected() { return selected; }
+    int currentFrame() { return currentFrame; }
+    private int dp(float v) { return Math.round(v*getResources().getDisplayMetrics().density); }
+    private void initMemoryProfile() {
+        ActivityManager manager=(ActivityManager)getSystemService(Context.ACTIVITY_SERVICE);
+        ActivityManager.MemoryInfo info=new ActivityManager.MemoryInfo();
+        if (manager!=null) manager.getMemoryInfo(info);
+        physicalRamBytes=info.totalMem;
+        SharedPreferences prefs=getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE);
+        lowRamPreference=RamProfile.normalize(prefs.getInt(LOW_RAM_PREFERENCE,RamProfile.AUTO));
+        lowRamEnabled=RamProfile.enabled(physicalRamBytes,lowRamPreference);
+    }
+
+    private void openSettings() {
+        final String[] choices={"Automatic (6 GiB or less)","Always on","Always off"};
+        LinearLayout content=new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(22),dp(10),dp(22),dp(10));
+        TextView description=new TextView(this);
+        String measured=physicalRamBytes>0
+            ? String.format(java.util.Locale.US,"%.1f GB detected",physicalRamBytes/1_000_000_000.0)
+            : "Physical RAM unavailable";
+        description.setText(measured+"\nCurrent: "+(lowRamEnabled?"Low RAM":"Normal")
+            +"\n\nLow RAM reduces canvas resolution, decoded image size, onion previews,"
+            +" undo history and playback redraws. Saved drawing detail is unchanged.");
+        description.setTextColor(Color.DKGRAY);
+        description.setTextSize(14);
+        description.setPadding(0,0,0,dp(8));
+        content.addView(description);
+        RadioGroup group=new RadioGroup(this);
+        group.setOrientation(RadioGroup.VERTICAL);
+        for (int i=0;i<choices.length;i++) {
+            RadioButton radio=new RadioButton(this);
+            radio.setText(choices[i]);
+            radio.setId(View.generateViewId());
+            group.addView(radio);
+            if (i==lowRamPreference) group.check(radio.getId());
+        }
+        content.addView(group);
+        new AlertDialog.Builder(this).setTitle("Settings • Memory")
+            .setView(content)
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Apply",(dialog,which)->{
+                int choice=RamProfile.AUTO;
+                for (int i=0;i<group.getChildCount();i++) {
+                    if (group.getChildAt(i).getId()==group.getCheckedRadioButtonId()) {
+                        choice=i;break;
+                    }
+                }
+                applyMemoryPreference(choice);
+            }).show();
+    }
+
+    private void applyMemoryPreference(int requested) {
+        int mode=RamProfile.normalize(requested);
+        boolean enabled=RamProfile.enabled(physicalRamBytes,mode);
+        lowRamPreference=mode;
+        getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE).edit()
+            .putInt(LOW_RAM_PREFERENCE,mode).apply();
+        if (enabled!=lowRamEnabled) {
+            stopPlayback();
+            lowRamEnabled=enabled;
+            for (Deque<Model.Stroke> history:undos.values()) {
+                while (history.size()>RamProfile.undoLimit(enabled)) history.removeLast();
+            }
+            for (Deque<Model.Stroke> history:redos.values()) {
+                while (history.size()>RamProfile.undoLimit(enabled)) history.removeLast();
+            }
+            canvas.setLowRamMode(enabled);
+            if (enabled) canvas.setOnionEnabled(false);
+        }
+        refresh();
+        toast(enabled ? "Low RAM mode enabled" : "Normal memory mode enabled");
+    }
+
+    @Override public void onLowMemory() {
+        super.onLowMemory();
+        clearTransientMemory();
+    }
+
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level>=TRIM_MEMORY_RUNNING_LOW) clearTransientMemory();
+    }
+
+    private void clearTransientMemory() {
+        // Project strokes stay intact; only scratch buffers and reversible cache state go.
+        redos.clear();
+        undos.clear();
+        if (canvas!=null) canvas.releaseMemory();
+    }
+
+
+    @Override public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        // Android 12 platform splash API (API 31); no compatibility dependency needed.
+        getSplashScreen().setOnExitAnimationListener(splash -> splash.remove());
+        getWindow().setStatusBarColor(Color.rgb(35,41,49));
+        getWindow().setNavigationBarColor(Color.rgb(35,41,49));
+        initMemoryProfile();
+        loadAutosave();
+        buildUI();
+        refresh();
+    }
+    private Button button(String text,Runnable handler) {
+        Button button=new Button(this);
+        button.setText(text);
+        button.setTextSize(12);
+        button.setAllCaps(false);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(9),0,dp(9),0);
+        button.setOnClickListener(v->handler.run());
+        return button;
+    }
+    private void buildUI() {
+        LinearLayout root=new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.rgb(242,245,248));
+        setContentView(root);
+        HorizontalScrollView topScroll=new HorizontalScrollView(this);
+        topScroll.setHorizontalScrollBarEnabled(false);
+        LinearLayout toolbar=new LinearLayout(this);
+        toolbar.setPadding(dp(4),dp(2),dp(4),dp(2));
+        toolbar.addView(button("New",this::newProject));
+        toolbar.addView(button("Open",this::openDocument));
+        toolbar.addView(button("Save",this::saveDocument));
+        toolbar.addView(button("Save as",this::createDocument));
+        toolbar.addView(button("⚙ Settings",this::openSettings));
+        toolbar.addView(button("+ Pose",()->add(false)));
+        toolbar.addView(button("Duplicate",()->add(true)));
+        toolbar.addView(button("Copy",this::copyPose));
+        toolbar.addView(button("Copy range",this::copyRangeDialog));
+        toolbar.addView(button("Paste",this::pastePose));
+        toolbar.addView(button("+ Text",()->editText(-1)));
+        toolbar.addView(button("+ Image",this::importImage));
+        toolbar.addView(button("+ Audio",this::importAudio));
+        toolbar.addView(button("Remove audio",this::removeAudio));
+        toolbar.addView(button("Delete",this::delete));
+        toolbar.addView(button("Undo",this::undo));
+        toolbar.addView(button("Redo",this::redo));
+        topScroll.addView(toolbar);
+        root.addView(topScroll,new LinearLayout.LayoutParams(-1,dp(52)));
+        FrameLayout workArea=new FrameLayout(this);
+        canvas=new DrawingView(this);
+        canvas.setLowRamMode(lowRamEnabled);
+        canvas.setListener(new DrawingView.Listener() {
+            @Override public void startStroke() {
+                stopPlayback();
+                canvas.setDrawing(model.ensureEditable(selected));
+            }
+            @Override public void endStroke() {
+                Model.Drawing drawing = model.drawingAt(selected);
+                if (!drawing.strokes.isEmpty()) {
+                    Deque<Model.Stroke> history = undos.computeIfAbsent(drawing.id, key -> new ArrayDeque<>());
+                    history.push(drawing.strokes.get(drawing.strokes.size()-1));
+                    while (history.size()>RamProfile.undoLimit(lowRamEnabled)) history.removeLast();
+                }
+                redos.remove(drawing.id);
+                changed();
+            }
+        });
+        workArea.addView(canvas,new FrameLayout.LayoutParams(-1,-1));
+        Button floating=button("✎ Tools",()->{});
+        floating.setContentDescription("Floating drawing tools");
+        floating.setOnClickListener(v->openTools(floating));
+        FrameLayout.LayoutParams floatingLayout=new FrameLayout.LayoutParams(-2,dp(46),Gravity.END|Gravity.TOP);
+        floatingLayout.setMargins(dp(8),dp(10),dp(10),0);
+        workArea.addView(floating,floatingLayout);
+        root.addView(workArea,new LinearLayout.LayoutParams(-1,0,1));
+        LinearLayout player=new LinearLayout(this);
+        player.setGravity(Gravity.CENTER_VERTICAL);
+        player.addView(button("◀",()->seek(currentFrame-1)));
+        playButton=button("▶ Play",this::togglePlayback);
+        player.addView(playButton);
+        player.addView(button("▶",()->seek(currentFrame+1)));
+        status=new TextView(this);
+        status.setTextSize(11);
+        status.setTextColor(Color.rgb(30,39,51));
+        status.setPadding(dp(6),0,dp(6),0);
+        player.addView(status,new LinearLayout.LayoutParams(0,dp(42),1));
+        root.addView(player,new LinearLayout.LayoutParams(-1,dp(49)));
+        HorizontalScrollView timelineScroll=new HorizontalScrollView(this);
+        timelineScroll.setFillViewport(true);
+        timelineScroll.setHorizontalScrollBarEnabled(true);
+        timeline=new TimelineView(this,this);
+        timelineScroll.addView(timeline,new HorizontalScrollView.LayoutParams(dp(400),dp(146)));
+        root.addView(timelineScroll,new LinearLayout.LayoutParams(-1,dp(155)));
+    }
+    private void openTools(View anchor) {
+        PopupMenu menu=new PopupMenu(this,anchor);
+        menu.getMenu().add("Settings / Low RAM mode").setOnMenuItemClickListener(item->{openSettings();return true;});
+        menu.getMenu().add("Brush color").setOnMenuItemClickListener(item->{pickColor();return true;});
+        menu.getMenu().add("Add text").setOnMenuItemClickListener(item->{editText(-1);return true;});
+        menu.getMenu().add("Import image").setOnMenuItemClickListener(item->{importImage();return true;});
+        menu.getMenu().add("Add audio").setOnMenuItemClickListener(item->{importAudio();return true;});
+        menu.getMenu().add("Remove audio").setOnMenuItemClickListener(item->{removeAudio();return true;});
+        menu.getMenu().add("Edit image placement").setOnMenuItemClickListener(item->{editImagePlacement();return true;});
+        menu.getMenu().add("Edit existing text").setOnMenuItemClickListener(item->{chooseText();return true;});
+        menu.getMenu().add("Import font (.ttf/.otf)")
+            .setOnMenuItemClickListener(item->{importFont();return true;});
+        menu.getMenu().add(canvas.isEraser()?"Use pen":"Use eraser").setOnMenuItemClickListener(item->{
+            canvas.setEraser(!canvas.isEraser());return true;
+        });
+        menu.getMenu().add("Brush size").setOnMenuItemClickListener(item->{pickSize();return true;});
+        menu.getMenu().add("Duplicate pose").setOnMenuItemClickListener(item->{add(true);return true;});
+        menu.getMenu().add("Copy pose").setOnMenuItemClickListener(item->{copyPose();return true;});
+        menu.getMenu().add("Copy pose range…").setOnMenuItemClickListener(item->{copyRangeDialog();return true;});
+        menu.getMenu().add("Paste pose").setOnMenuItemClickListener(item->{pastePose();return true;});
+        menu.getMenu().add(canvas.isOnionEnabled()?"Hide onion skins":"Show onion skins")
+            .setOnMenuItemClickListener(item->{canvas.setOnionEnabled(!canvas.isOnionEnabled());return true;});
+        menu.getMenu().add("New pose").setOnMenuItemClickListener(item->{add(false);return true;});
+        menu.show();
+    }
+    private void chooseText() {
+        Model.Drawing d=model.drawingAt(selected);
+        if (d.texts.isEmpty()) {toast("No text in this pose");return;}
+        String[] names=new String[d.texts.size()];
+        for (int i=0;i<names.length;i++) {
+            String value=d.texts.get(i).value.replace('\n',' ');
+            names[i]=value.length()>45 ? value.substring(0,45)+"…" : value;
+        }
+        new AlertDialog.Builder(this).setTitle("Edit text")
+            .setItems(names,(dialog,which)->editText(which)).show();
+    }
+    private void editText(int index) {
+        Model.Drawing d=model.drawingAt(selected);
+        if (index>=d.texts.size()) return;
+        Model.TextItem existing=index<0 ? null : d.texts.get(index);
+        LinearLayout form=new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(22),dp(8),dp(22),0);
+        EditText value=new EditText(this);
+        value.setHint("Text (multiple lines allowed)");
+        value.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        value.setMinLines(2);
+        value.setMaxLines(6);
+        value.setText(existing==null ? "Text" : existing.value);
+        form.addView(value);
+        EditText family=new EditText(this);
+        family.setSingleLine(true);
+        family.setHint("Installed font family (e.g. sans-serif)");
+        family.setText(existing==null ? "sans-serif" : existing.fontFamily);
+        form.addView(family);
+        EditText size=new EditText(this);
+        size.setSingleLine(true);
+        size.setInputType(InputType.TYPE_CLASS_NUMBER);
+        size.setHint("Text size");
+        size.setText(String.valueOf(Math.round(existing==null?48:existing.size)));
+        form.addView(size);
+        CheckBox bold=new CheckBox(this);
+        bold.setText("Bold");
+        bold.setChecked(existing!=null && (existing.style & 1)!=0);
+        form.addView(bold);
+        CheckBox italic=new CheckBox(this);
+        italic.setText("Italic");
+        italic.setChecked(existing!=null && (existing.style & 2)!=0);
+        form.addView(italic);
+        String[] colorNames={"Black","White","Red","Orange","Green","Blue","Purple"};
+        int[] colors={Color.BLACK,Color.WHITE,0xFFEB5353,0xFFFFA522,0xFF36B76B,0xFF318DF5,0xFF9455D4};
+        Spinner color=new Spinner(this);
+        color.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,colorNames));
+        if (existing!=null) {
+            for (int i=0;i<colors.length;i++) if (colors[i]==existing.color) color.setSelection(i);
+        }
+        form.addView(color);
+        new AlertDialog.Builder(this).setTitle(index<0?"Add text":"Edit text")
+            .setView(form)
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("Apply",(dialog,which)->{
+                String content=value.getText().toString();
+                if (content.isEmpty() || content.length()>10000) {
+                    toast("Text must contain 1–10000 characters");return;
+                }
+                float textSize;
+                try {textSize=Float.parseFloat(size.getText().toString());}
+                catch (NumberFormatException e) {toast("Invalid font size");return;}
+                if (!(textSize>=1f && textSize<=4096f)) {toast("Text size must be 1–4096");return;}
+                stopPlayback();
+                Model.Drawing editable=model.ensureEditable(selected);
+                int style=(bold.isChecked()?1:0)|(italic.isChecked()?2:0);
+                String chosenFamily=family.getText().toString().trim();
+                if (chosenFamily.isEmpty()) chosenFamily="sans-serif";
+                if (index<0) {
+                    Model.TextItem item=new Model.TextItem(content,chosenFamily,importedFontPath,
+                        style,colors[color.getSelectedItemPosition()],textSize,140,120);
+                    editable.texts.add(item);
+                } else {
+                    Model.TextItem item=editable.texts.get(index);
+                    item.value=content;
+                    item.fontFamily=chosenFamily;
+                    item.size=textSize;
+                    item.style=style;
+                    item.color=colors[color.getSelectedItemPosition()];
+                    // Keep an existing imported font unless the user imports a new one.
+                    if (!importedFontPath.isEmpty()) item.fontPath=importedFontPath;
+                }
+                canvas.setDrawing(editable);
+                canvas.rebuild();
+                changed();
+            }).show();
+    }
+    private void importFont() {
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(intent,IMPORT_FONT);
+    }
+    private void readImportedFont(Uri uri) {
+        String name="font.ttf";
+        try (Cursor cursor=getContentResolver().query(uri,null,null,null,null)) {
+            if (cursor!=null && cursor.moveToFirst()) {
+                int column=cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (column>=0) name=cursor.getString(column);
+            }
+        } catch (RuntimeException ignored) { }
+        if (name==null) name="font.ttf";
+        String lower=name.toLowerCase(java.util.Locale.ROOT);
+        if (!lower.endsWith(".ttf") && !lower.endsWith(".otf") && !lower.endsWith(".ttc")) {
+            toast("Choose a .ttf, .otf or .ttc font");return;
+        }
+        String extension=lower.substring(lower.lastIndexOf('.'));
+        File folder=new File(getFilesDir(),"fonts");
+        if (!folder.exists() && !folder.mkdirs()) {toast("Cannot create font directory");return;}
+        File output=new File(folder,"font-"+System.nanoTime()+extension);
+        try (InputStream input=getContentResolver().openInputStream(uri);
+             OutputStream destination=new FileOutputStream(output)) {
+            if (input==null) throw new IOException("Cannot open font");
+            byte[] buffer=new byte[8192]; int length; long total=0;
+            while ((length=input.read(buffer))!=-1) {
+                total+=length;
+                if (total>25_000_000L) throw new IOException("Font exceeds 25 MB");
+                destination.write(buffer,0,length);
+            }
+            android.graphics.Typeface.createFromFile(output);
+            importedFontPath=output.getAbsolutePath();
+            toast("Font imported. Add text to use it.");
+        } catch (Exception e) {
+            output.delete();
+            toast("Cannot import font: "+e.getMessage());
+        }
+    }
+    private void pickColor() {
+        String[] labels={"Black","White","Red","Orange","Green","Blue","Purple"};
+        int[] colors={Color.BLACK,Color.WHITE,0xFFEB5353,0xFFFFA522,0xFF36B76B,0xFF318DF5,0xFF9455D4};
+        new AlertDialog.Builder(this).setTitle("Brush color")
+            .setItems(labels,(dialog,which)->canvas.setBrushColor(colors[which])).show();
+    }
+    private void pickSize() {
+        SeekBar slider=new SeekBar(this);
+        slider.setMax(59);
+        slider.setProgress(5);
+        new AlertDialog.Builder(this).setTitle("Brush size (1–60)")
+            .setView(slider).setPositiveButton("Apply",(dialog,which)->canvas.setBrushWidth(slider.getProgress()+1))
+            .setNegativeButton("Cancel",null).show();
+    }
+    private void refresh() {
+        if (canvas==null) return;
+        canvas.setImageAssets(model.imageAssets);
+        canvas.setDrawing(model.drawingAt(selected));
+        canvas.setOnionNeighbors(selected>0?model.drawingAt(selected-1):null,
+                                 selected<model.timeline.size()-1?model.drawingAt(selected+1):null);
+        timeline.refresh();
+        status.setText(String.format(java.util.Locale.US,"Pose %d/%d   %d/%d frames   %.1fs",
+            selected+1,model.timeline.size(),currentFrame+1,model.totalFrames(),
+            model.totalFrames()/(float)model.fps)+" • "+model.audioClips.size()+" audio"
+            +(lowRamEnabled ? " • Low RAM" : ""));
+    }
+    void seek(int frame) {
+        int next=Math.max(0,Math.min(model.totalFrames()-1,frame));
+        selected=model.indexAt(next);
+        currentFrame=next;
+        selectedFrom=selectedTo=-1;
+        refresh();
+    }
+    void extendClip(int clipIndex,int frames) {
+        int original=model.timeline.get(clipIndex).duration;
+        model.extend(clipIndex,frames);
+        if (original==model.timeline.get(clipIndex).duration) return;
+        selected=clipIndex;
+        currentFrame=model.clipStart(clipIndex)+Math.min(model.timeline.get(clipIndex).duration-1,
+                         Math.max(0,currentFrame-model.clipStart(clipIndex)));
+        changed();
+    }
+    private void add(boolean duplicate) {
+        stopPlayback();
+        selected=model.addAfter(selected,duplicate);
+        selectedFrom=selectedTo=-1;
+        currentFrame=model.clipStart(selected);
+        changed();
+    }
+    private void copyPose() {
+        clipboard=model.copyRange(selected,selected);
+        selectedFrom=selectedTo=selected;
+        toast("Pose copied — paste as many times as needed");
+        refresh();
+    }
+    private void copyRangeDialog() {
+        // On touchscreens, two pose numbers are more precise than tiny resize handles.
+        LinearLayout fields=new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
+        fields.setPadding(dp(24),dp(6),dp(24),0);
+        EditText first=new EditText(this),last=new EditText(this);
+        first.setInputType(InputType.TYPE_CLASS_NUMBER);
+        last.setInputType(InputType.TYPE_CLASS_NUMBER);
+        first.setHint("First pose (1–"+model.timeline.size()+")");
+        last.setHint("Last pose (1–"+model.timeline.size()+")");
+        first.setText(String.valueOf(selected+1));
+        last.setText(String.valueOf(selected+1));
+        fields.addView(first); fields.addView(last);
+        new AlertDialog.Builder(this).setTitle("Copy a sequence of poses")
+            .setView(fields).setNegativeButton("Cancel",null)
+            .setPositiveButton("Copy",(d,w)->{
+                try {
+                    int from=Integer.parseInt(first.getText().toString())-1;
+                    int to=Integer.parseInt(last.getText().toString())-1;
+                    if (from<0 || from>to || to>=model.timeline.size()) {
+                        toast("Enter a valid first and last pose"); return;
+                    }
+                    clipboard=model.copyRange(from,to);
+                    selectedFrom=from;selectedTo=to;
+                    toast("Copied "+clipboard.size()+" poses. Paste repeatedly to reuse them.");
+                    refresh();
+                } catch (NumberFormatException e) {toast("Enter pose numbers");}
+            }).show();
+    }
+    boolean poseSelected(int i) {
+        return selectedFrom>=0 && i>=selectedFrom && i<=selectedTo;
+    }
+    private void pastePose() {
+        if (clipboard==null) { toast("Copy a pose or a range first"); return; }
+        stopPlayback();
+        try {
+            int first=selected+1;
+            int last=model.pasteSequenceAfter(selected,clipboard);
+            selectedFrom=first; selectedTo=last;
+            selected=last;
+            currentFrame=model.clipStart(selected);
+            changed();
+        } catch (IllegalStateException | IllegalArgumentException e) {
+            toast("Cannot paste: "+e.getMessage());
+        }
+    }
+    @Override public boolean onKeyShortcut(int keyCode,KeyEvent event) {
+        if (event.isCtrlPressed() && keyCode==KeyEvent.KEYCODE_C) {
+            copyPose(); return true;
+        }
+        if (event.isCtrlPressed() && keyCode==KeyEvent.KEYCODE_V) {
+            pastePose(); return true;
+        }
+        return super.onKeyShortcut(keyCode,event);
+    }
+    private void delete() {
+        if (model.timeline.size()==1) {toast("Keep at least one drawing");return;}
+        stopPlayback();
+        model.remove(selected);
+        selectedFrom=selectedTo=-1;
+        selected=Math.min(selected,model.timeline.size()-1);
+        currentFrame=model.clipStart(selected);
+        changed();
+    }
+    private void undo() {
+        stopPlayback();
+        Model.Drawing drawing=model.drawingAt(selected);
+        Deque<Model.Stroke> history=undos.get(drawing.id);
+        if (history==null || history.isEmpty()) return;
+        Model.Stroke last=history.pop();
+        if (!drawing.strokes.remove(last)) return;
+        redos.computeIfAbsent(drawing.id,key->new ArrayDeque<>()).push(last);
+        canvas.rebuild();
+        changed();
+    }
+    private void redo() {
+        stopPlayback();
+        Model.Drawing drawing=model.drawingAt(selected);
+        Deque<Model.Stroke> stack=redos.get(drawing.id);
+        if (stack==null || stack.isEmpty()) return;
+        Model.Stroke last=stack.pop();
+        drawing.strokes.add(last);
+        Deque<Model.Stroke> history = undos.computeIfAbsent(drawing.id,key->new ArrayDeque<>());
+        history.push(last);
+        while (history.size()>RamProfile.undoLimit(lowRamEnabled)) history.removeLast();
+        canvas.rebuild();
+        changed();
+    }
+    private void togglePlayback() {
+        if (playing) {stopPlayback();return;}
+        playing=true;
+        playbackOriginFrame=currentFrame;
+        playbackOriginNanos=System.nanoTime();
+        playButton.setText("■ Stop");
+        canvas.setOnionPlaying(true);
+        syncAudio();
+        handler.postDelayed(playback,16);
+    }
+    void stopPlayback() {
+        releaseAudio();
+        if (!playing) return;
+        playing=false;
+        handler.removeCallbacks(playback);
+        playButton.setText("▶ Play");
+        canvas.setOnionPlaying(false);
+    }
+    private void releaseAudio() {
+        if (audioPlayer!=null) {
+            try { audioPlayer.release(); } catch (RuntimeException ignored) {}
+            audioPlayer=null;
+        }
+        playingAudioId=null;
+    }
+    private void syncAudio() {
+        // One active compressed audio stream at a time: optimized for older low-RAM phones.
+        Model.AudioClip clip=null;
+        for (Model.AudioClip candidate:model.audioClips) {
+            if (!candidate.muted && candidate.volume>0 &&
+                currentFrame>=candidate.startFrame && currentFrame<candidate.endFrame()) {
+                clip=candidate;break;
+            }
+        }
+        if (clip==null) {releaseAudio();return;}
+        if (playingAudioId!=null && playingAudioId.equals(clip.id) && audioPlayer!=null) {
+            try { if (audioPlayer.isPlaying()) return; }
+            catch (IllegalStateException ignored) {}
+        }
+        releaseAudio();
+        try {
+            MediaPlayer player=new MediaPlayer();
+            player.setDataSource(clip.sourcePath);
+            player.setAudioStreamType(android.media.AudioManager.STREAM_MUSIC);
+            player.prepare();
+            long at=clip.sourceOffsetMillis+Math.round(
+                (currentFrame-clip.startFrame)*1000d/model.fps);
+            player.seekTo((int)Math.min(Integer.MAX_VALUE,Math.max(0,at)));
+            player.setVolume(clip.volume,clip.volume);
+            player.start();
+            audioPlayer=player;
+            playingAudioId=clip.id;
+        } catch (Exception e) {
+            releaseAudio();
+            android.util.Log.w("HoldFrame","Cannot play audio",e);
+        }
+    }
+    private void changed() {
+        refresh();
+        if (autosaveJob!=null) handler.removeCallbacks(autosaveJob);
+        autosaveJob=this::writeAutosave;
+        handler.postDelayed(autosaveJob,RamProfile.autosaveDelayMs(lowRamEnabled));
+    }
+    private File autosaveFile() {return new File(getFilesDir(),"autosave.holdframe");}
+    private void writeAutosave() {
+        File file=autosaveFile();
+        File temp=new File(getFilesDir(),"autosave.holdframe.tmp");
+        try {
+            try (FileOutputStream stream=new FileOutputStream(temp)) {
+                ProjectIO.write(model,stream);
+                stream.getFD().sync();
+            }
+            try {
+                Files.move(temp.toPath(),file.toPath(),StandardCopyOption.REPLACE_EXISTING,
+                           StandardCopyOption.ATOMIC_MOVE);
+            } catch (java.nio.file.AtomicMoveNotSupportedException ex) {
+                Files.move(temp.toPath(),file.toPath(),StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (Exception e) {
+            toast("Autosave failed: "+e.getMessage());
+            temp.delete();
+        }
+    }
+    private void loadAutosave() {
+        File file=autosaveFile();
+        if (!file.isFile()) return;
+        try (FileInputStream input=new FileInputStream(file)) {
+            model=ProjectIO.read(input);
+        } catch (IOException e) { android.util.Log.w("HoldFrame","Autosave could not be opened",e); }
+    }
+    private void newProject() {
+        stopPlayback();
+        new AlertDialog.Builder(this).setTitle("New project")
+            .setMessage("Start a new project? Save the current project to a file first if you want to keep it.")
+            .setNegativeButton("Cancel",null).setPositiveButton("Create",(d,w)->{
+                model=new Model.Project(); redos.clear(); undos.clear(); documentUri=null;
+                selected=currentFrame=0;selectedFrom=selectedTo=-1;
+                canvas.setDrawing(null);
+                changed();
+            }).show();
+    }
+    private void createDocument() {
+        Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/octet-stream");
+        intent.putExtra(Intent.EXTRA_TITLE,"animation.holdframe");
+        startActivityForResult(intent,CREATE_DOCUMENT);
+    }
+    private void saveDocument() {
+        if (documentUri==null) {createDocument();return;}
+        try (OutputStream stream=getContentResolver().openOutputStream(documentUri,"wt")) {
+            if (stream==null) throw new IOException("Could not open document");
+            ProjectIO.write(model,stream);
+            toast("Project saved");
+        } catch (IOException e) { new AlertDialog.Builder(this).setTitle("Save failed")
+                .setMessage(e.getMessage()).setPositiveButton("OK",null).show(); }
+    }
+    private void openDocument() {
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        startActivityForResult(intent,OPEN_DOCUMENT);
+    }
+    @Override protected void onActivityResult(int requestCode,int resultCode,Intent data) {
+        super.onActivityResult(requestCode,resultCode,data);
+        if (resultCode!=RESULT_OK || data==null || data.getData()==null) return;
+        Uri uri=data.getData();
+        if (requestCode==CREATE_DOCUMENT) {documentUri=uri;saveDocument();}
+        else if (requestCode==IMPORT_FONT) {
+            readImportedFont(uri);
+        } else if (requestCode==IMPORT_IMAGE) {
+            readImportedImage(uri);
+        } else if (requestCode==IMPORT_AUDIO) {
+            readImportedAudio(uri);
+        } else if (requestCode==OPEN_DOCUMENT) {
+            try (InputStream stream=getContentResolver().openInputStream(uri)) {
+                if (stream==null) throw new IOException("Could not open document");
+                Model.Project loaded=ProjectIO.read(stream);
+                stopPlayback();model=loaded;documentUri=uri;redos.clear(); undos.clear();selected=currentFrame=0;selectedFrom=selectedTo=-1;
+                canvas.setDrawing(null);changed();
+                toast("Project opened");
+            } catch (IOException e) {
+                new AlertDialog.Builder(this).setTitle("Open failed").setMessage(e.getMessage())
+                    .setPositiveButton("OK",null).show();
+            }
+        }
+    }
+    private void importImage() { openMediaPicker("image/*",IMPORT_IMAGE); }
+    private void importAudio() { openMediaPicker("audio/*",IMPORT_AUDIO); }
+    private void openMediaPicker(String type,int request) {
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(type);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivityForResult(intent,request);
+    }
+    private static byte[] readLimited(InputStream stream,int limit) throws IOException {
+        if (stream==null) throw new IOException("Cannot read selected file");
+        try (InputStream input=stream; ByteArrayOutputStream output=new ByteArrayOutputStream()) {
+            byte[] buffer=new byte[8192]; int read;
+            while ((read=input.read(buffer))!=-1) {
+                if (read>limit-output.size()) throw new IOException("File exceeds import limit");
+                output.write(buffer,0,read);
+            }
+            return output.toByteArray();
+        }
+    }
+    private void readImportedImage(Uri uri) {
+        try {
+            byte[] bytes=readLimited(getContentResolver().openInputStream(uri),
+                RamProfile.imageImportLimit(lowRamEnabled));
+            BitmapFactory.Options opts=new BitmapFactory.Options();
+            opts.inJustDecodeBounds=true;
+            BitmapFactory.decodeByteArray(bytes,0,bytes.length,opts);
+            if (opts.outWidth<=0 || opts.outHeight<=0 ||
+                (long)opts.outWidth*opts.outHeight>8_000_000L)
+                throw new IOException("Image too large or unsupported (8 megapixels max)");
+            byte[] hash=MessageDigest.getInstance("SHA-256").digest(bytes);
+            StringBuilder hex=new StringBuilder(64);
+            final char[] digits="0123456789abcdef".toCharArray();
+            for (byte b:hash) { hex.append(digits[(b>>>4)&15]); hex.append(digits[b&15]); }
+            String id=hex.toString();
+            if (!model.imageAssets.containsKey(id) && model.imageAssets.size()>=256)
+                throw new IOException("Project image asset limit reached");
+            if (!model.imageAssets.containsKey(id)) {
+                long total=bytes.length;
+                for (byte[] asset:model.imageAssets.values()) total+=asset.length;
+                if (total>RamProfile.maxImageAssetsBytes(lowRamEnabled))
+                throw new IOException("Image storage limit reached");
+            }
+            float factor=Math.min(1f,Math.min(680f/opts.outWidth,390f/opts.outHeight));
+            float width=opts.outWidth*factor,height=opts.outHeight*factor;
+            model.imageAssets.putIfAbsent(id,bytes);
+            stopPlayback();
+            Model.Drawing edit=model.ensureEditable(selected);
+            edit.images.add(new Model.ImageItem(id,(Model.WIDTH-width)/2,
+                (Model.HEIGHT-height)/2,width,height));
+            canvas.setDrawing(edit);
+            canvas.rebuild();
+            changed();
+            toast("Image imported. Use Tools → Edit image placement.");
+        } catch (Exception e) {toast("Image import failed: "+e.getMessage());}
+    }
+    private void editImagePlacement() {
+        Model.Drawing drawing=model.drawingAt(selected);
+        if (drawing.images.isEmpty()) {toast("No images in this pose");return;}
+        String[] options=new String[drawing.images.size()];
+        for (int i=0;i<options.length;i++) options[i]="Image "+(i+1);
+        new AlertDialog.Builder(this).setTitle("Choose image")
+            .setItems(options,(d,index)->showImageBoundsDialog(index)).show();
+    }
+    private void showImageBoundsDialog(int index) {
+        Model.ImageItem item=model.drawingAt(selected).images.get(index);
+        LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(dp(20),dp(8),dp(20),0);
+        EditText[] inputs=new EditText[4];
+        float[] values={item.x,item.y,item.width,item.height};
+        String[] names={"X","Y","Width","Height"};
+        for (int i=0;i<4;i++) {
+            inputs[i]=new EditText(this);
+            inputs[i].setInputType(InputType.TYPE_CLASS_NUMBER|
+                InputType.TYPE_NUMBER_FLAG_DECIMAL|InputType.TYPE_NUMBER_FLAG_SIGNED);
+            inputs[i].setHint(names[i]);
+            inputs[i].setText(String.valueOf(values[i]));
+            form.addView(inputs[i]);
+        }
+        new AlertDialog.Builder(this).setTitle("Move / resize image")
+            .setView(form).setNegativeButton("Cancel",null)
+            .setPositiveButton("Apply",(d,w)->{
+                try {
+                    float x=Float.parseFloat(inputs[0].getText().toString());
+                    float y=Float.parseFloat(inputs[1].getText().toString());
+                    float width=Float.parseFloat(inputs[2].getText().toString());
+                    float height=Float.parseFloat(inputs[3].getText().toString());
+                    if (!Float.isFinite(x)||!Float.isFinite(y)||
+                        Math.abs(x)>100_000||Math.abs(y)>100_000||
+                        !(width>=.01f&&width<=100_000f)||
+                        !(height>=.01f&&height<=100_000f)) {
+                        toast("Invalid position or dimensions");return;
+                    }
+                    Model.ImageItem edit=model.ensureEditable(selected).images.get(index);
+                    edit.x=x;edit.y=y;edit.width=width;edit.height=height;
+                    canvas.rebuild();changed();
+                } catch (NumberFormatException e) {toast("Enter valid numbers");}
+            }).show();
+    }
+    private void readImportedAudio(Uri uri) {
+        // SAF streams are not stable across app restarts. Copy one compressed sound
+        // file to app-private storage; MediaPlayer streams it rather than decoding to RAM.
+        final int startingFrame=currentFrame;
+        final Model.Project targetProject=model;
+        Thread worker=new Thread(()->{
+            File folder=new File(getFilesDir(),"audio");
+            File target=new File(folder,UUID.randomUUID().toString()+".sound");
+            try {
+                if (!folder.isDirectory()&&!folder.mkdirs()) throw new IOException("Cannot create audio directory");
+                try (InputStream in=getContentResolver().openInputStream(uri);
+                     FileOutputStream out=new FileOutputStream(target)) {
+                    if (in==null) throw new IOException("Cannot read audio file");
+                    byte[] block=new byte[8192];int n;long size=0;
+                    while ((n=in.read(block))!=-1) {
+                        size+=n;
+                        if (size>60_000_000L) throw new IOException("Audio exceeds 60 MB");
+                        out.write(block,0,n);
+                    }
+                }
+                MediaMetadataRetriever reader=new MediaMetadataRetriever();
+                long length;
+                try {
+                    reader.setDataSource(target.getAbsolutePath());
+                    String value=reader.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                    length=value==null?0:Long.parseLong(value);
+                } finally {reader.release();}
+                if (length<1 || length>8*60*60*1000L) throw new IOException("Invalid audio duration");
+                final int frames=(int)Math.max(1,Math.min(Model.MAX_DURATION,
+                    (long)Math.ceil(length*model.fps/1000.0)));
+                runOnUiThread(()->{
+                    try {
+                        if (model!=targetProject) { target.delete(); return; }
+                        model.addAudio(target.getAbsolutePath(),startingFrame,frames);
+                        changed();toast("Audio added");
+                    } catch (Exception e) {
+                        target.delete();toast("Audio import failed: "+e.getMessage());
+                    }
+                });
+            } catch (Exception e) {
+                target.delete();
+                runOnUiThread(()->toast("Audio import failed: "+e.getMessage()));
+            }
+        },"holdframe-audio-import");
+        worker.setDaemon(true);
+        worker.start();
+    }
+    private void removeAudio() {
+        if (model.audioClips.isEmpty()) {toast("No audio clips");return;}
+        String[] titles=new String[model.audioClips.size()];
+        for (int i=0;i<titles.length;i++) {
+            Model.AudioClip clip=model.audioClips.get(i);
+            titles[i]="Audio "+(i+1)+" — "+(clip.startFrame/(float)model.fps)+"s";
+        }
+        new AlertDialog.Builder(this).setTitle("Remove audio clip")
+            .setItems(titles,(d,which)->{
+                stopPlayback();
+                Model.AudioClip removed=model.audioClips.remove(which);
+                boolean used=false;
+                for (Model.AudioClip remaining:model.audioClips)
+                    if (remaining.sourcePath.equals(removed.sourcePath)) {used=true;break;}
+                // Delete only files which are inside HoldFrame's private import folder.
+                File file=new File(removed.sourcePath);
+                File folder=new File(getFilesDir(),"audio");
+                if (!used && file.getParentFile()!=null && file.getParentFile().equals(folder)) file.delete();
+                changed();
+            }).show();
+    }
+    private void toast(String text) {Toast.makeText(this,text,Toast.LENGTH_SHORT).show();}
+    @Override protected void onPause() {
+        stopPlayback();
+        if (autosaveJob!=null) handler.removeCallbacks(autosaveJob);
+        writeAutosave();
+        super.onPause();
+    }
+    @Override protected void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
+        releaseAudio();
+        super.onDestroy();
+    }
+}
