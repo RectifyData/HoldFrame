@@ -17,10 +17,16 @@ import java.util.Map;
 import android.view.MotionEvent;
 import android.view.View;
 import dev.rectifydata.holdframe.core.Model;
+import dev.rectifydata.holdframe.core.TextTransformMath;
 
 /** One reusable bitmap is used only as a render cache; project strokes remain vector data. */
 public final class DrawingView extends View {
-    interface Listener { void startStroke(); void endStroke(); }
+    interface Listener {
+        void startStroke();
+        void endStroke();
+        void beginTextTransform();
+        void endTextTransform(int index,Model.TextItem before,Model.TextItem after);
+    }
     private final Paint stagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint brushPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
@@ -47,6 +53,13 @@ public final class DrawingView extends View {
     private boolean eraser;
     private Listener listener;
     private float lastX, lastY;
+    private boolean textTransformMode,liveTextPreview;
+    private int selectedTextIndex=-1,textGesture,resizeCorner=-1;
+    private boolean textChanged;
+    private float gestureX,gestureY,textLogicalW,textLogicalH;
+    private Model.TextItem textBefore;
+    private final Paint selectionPaint=new Paint(Paint.ANTI_ALIAS_FLAG);
+
     // Zoom only transforms the stage, not the saved vector drawing or raster cache.
     private float zoom=1f, panX, panY;
     private boolean panMode, panning, pinching, suppressStrokeUntilUp;
@@ -54,7 +67,10 @@ public final class DrawingView extends View {
 
     float zoomLevel(){return zoom;}
     boolean isPanMode(){return panMode;}
-    void setPanMode(boolean enabled){panMode=enabled;}
+    void setPanMode(boolean enabled){
+        if(enabled)setTextTransformMode(false);
+        panMode=enabled;
+    }
     void resetZoom(){zoom=1f;panX=panY=0f;invalidate();}
     void changeZoom(float factor){rect();zoomAt(zoom*factor,getWidth()/2f,getHeight()/2f);}
     private void zoomAt(float requested,float focusX,float focusY){
@@ -88,6 +104,21 @@ public final class DrawingView extends View {
         brushPaint.setStyle(Paint.Style.STROKE);
     }
     void setListener(Listener l) { listener = l; }
+    boolean isTextTransformMode(){return textTransformMode;}
+    int selectedTextIndex(){return selectedTextIndex;}
+    void setTextTransformMode(boolean enabled){
+        if(textTransformMode==enabled)return;
+        finishTextGesture(false);
+        textTransformMode=enabled;panMode=false;
+        if(!enabled)selectedTextIndex=-1;
+        invalidate();
+    }
+    void selectText(int index){
+        if(drawing==null||index<0||index>=drawing.texts.size())return;
+        setTextTransformMode(true);
+        selectedTextIndex=index;invalidate();
+    }
+
     void setLowRamMode(boolean lowRam) {
         if (lowRamMode==lowRam) return;
         lowRamMode=lowRam;
@@ -152,6 +183,7 @@ public final class DrawingView extends View {
     void setBrushWidth(float w) { brushWidth = Math.max(1, Math.min(100, w)); }
     void setDrawing(Model.Drawing d) {
         if (d == drawing) return;
+        if(textGesture==0){selectedTextIndex=-1;liveTextPreview=false;}
         drawing = d;
         rebuild();
     }
@@ -209,7 +241,10 @@ public final class DrawingView extends View {
                 }
             }
             brushPaint.setXfermode(null);
-            for (Model.TextItem text : drawing.texts) renderText(raster,text);
+            for(int i=0;i<drawing.texts.size();i++){
+                if(liveTextPreview&&i==selectedTextIndex)continue;
+                renderText(raster,drawing.texts.get(i));
+            }
         }
         invalidate();
     }
@@ -253,6 +288,114 @@ public final class DrawingView extends View {
             baseline+=step;
         }
         canvas.restoreToCount(saved);
+    }
+    private RectF textBounds(Model.TextItem text){
+        textPaint.setTextSize(text.size);
+        textPaint.setTypeface(fontFor(text));
+        Paint.FontMetrics metrics=textPaint.getFontMetrics();
+        float lineHeight=Math.max(1f,metrics.descent-metrics.ascent+metrics.leading);
+        float width=0f;
+        String[] lines=text.value==null?new String[0]:text.value.split("\n",-1);
+        for(String line:lines)width=Math.max(width,textPaint.measureText(line));
+        return new RectF(text.x,text.y,text.x+Math.max(8f,width)*text.scaleX,
+                          text.y+Math.max(8f,lineHeight*Math.max(1,lines.length))*text.scaleY);
+    }
+    private int hitText(float screenX,float screenY){
+        if(drawing==null)return -1;
+        float x=sx(screenX),y=sy(screenY);
+        for(int i=drawing.texts.size()-1;i>=0;i--)
+            if(textBounds(drawing.texts.get(i)).contains(x,y))return i;
+        return -1;
+    }
+    private int hitHandle(float x,float y){
+        if(drawing==null||selectedTextIndex<0||selectedTextIndex>=drawing.texts.size())return -1;
+        RectF b=textBounds(drawing.texts.get(selectedTextIndex));
+        float kx=bounds.width()/Model.WIDTH,ky=bounds.height()/Model.HEIGHT;
+        float left=bounds.left+b.left*kx,right=bounds.left+b.right*kx;
+        float top=bounds.top+b.top*ky,bottom=bounds.top+b.bottom*ky;
+        float[][] xy={{left,top},{right,top},{left,bottom},{right,bottom}};
+        float hitSize=Math.max(14f,18f*getResources().getDisplayMetrics().density);
+        for(int i=0;i<4;i++)if(Math.hypot(x-xy[i][0],y-xy[i][1])<=hitSize)return i;
+        return -1;
+    }
+    private void drawTextHandles(Canvas canvas){
+        if(!textTransformMode||drawing==null||selectedTextIndex<0||selectedTextIndex>=drawing.texts.size())return;
+        RectF b=textBounds(drawing.texts.get(selectedTextIndex));
+        float kx=bounds.width()/Model.WIDTH,ky=bounds.height()/Model.HEIGHT;
+        RectF box=new RectF(bounds.left+b.left*kx,bounds.top+b.top*ky,
+                            bounds.left+b.right*kx,bounds.top+b.bottom*ky);
+        float dp=getResources().getDisplayMetrics().density;
+        selectionPaint.setColor(0xFF147BEB);
+        selectionPaint.setStrokeWidth(2f*dp);
+        selectionPaint.setStyle(Paint.Style.STROKE);
+        canvas.drawRect(box,selectionPaint);
+        selectionPaint.setStyle(Paint.Style.FILL);
+        float[][] xy={{box.left,box.top},{box.right,box.top},{box.left,box.bottom},{box.right,box.bottom}};
+        for(float[] p:xy){
+            selectionPaint.setColor(Color.WHITE);canvas.drawCircle(p[0],p[1],8f*dp,selectionPaint);
+            selectionPaint.setColor(0xFF147BEB);canvas.drawCircle(p[0],p[1],5f*dp,selectionPaint);
+        }
+    }
+    private boolean textTouch(MotionEvent event){
+        int type=event.getActionMasked();
+        if(type==MotionEvent.ACTION_DOWN){
+            resizeCorner=hitHandle(event.getX(),event.getY());
+            int index=resizeCorner>=0?selectedTextIndex:hitText(event.getX(),event.getY());
+            if(index<0){selectedTextIndex=-1;invalidate();return true;}
+            selectedTextIndex=index;
+            textGesture=resizeCorner>=0?2:1;
+            textChanged=false;
+            textBefore=drawing.texts.get(index).copy();
+            RectF b=textBounds(textBefore);
+            textLogicalW=Math.max(1f,b.width()/Math.max(.05f,textBefore.scaleX));
+            textLogicalH=Math.max(1f,b.height()/Math.max(.05f,textBefore.scaleY));
+            gestureX=sx(event.getX());gestureY=sy(event.getY());
+            getParent().requestDisallowInterceptTouchEvent(true);
+            invalidate();return true;
+        }
+        if(textGesture==0)return true;
+        if(type==MotionEvent.ACTION_MOVE){
+            float x=sx(event.getX()),y=sy(event.getY());
+            if(!textChanged){
+                float threshold=Math.max(2.5f,7f*getResources().getDisplayMetrics().density*
+                                        Model.WIDTH/Math.max(1f,bounds.width()));
+                if(Math.hypot(x-gestureX,y-gestureY)<threshold)return true;
+                if(listener!=null)listener.beginTextTransform();
+                if(drawing==null||selectedTextIndex>=drawing.texts.size()){
+                    finishTextGesture(false);return true;
+                }
+                textChanged=true;liveTextPreview=true;
+                rebuild(); // Snapshot static background once, not on every motion.
+            }
+            Model.TextItem item=drawing.texts.get(selectedTextIndex);
+            if(textGesture==1){
+                item.x=Math.max(-100000f,Math.min(100000f,textBefore.x+x-gestureX));
+                item.y=Math.max(-100000f,Math.min(100000f,textBefore.y+y-gestureY));
+            }else{
+                TextTransformMath.Result result=TextTransformMath.resize(textBefore.x,textBefore.y,
+                    textLogicalW,textLogicalH,textBefore.scaleX,textBefore.scaleY,resizeCorner,x,y);
+                item.x=result.x;item.y=result.y;item.scaleX=result.scaleX;item.scaleY=result.scaleY;
+            }
+            invalidate();return true;
+        }
+        if(type==MotionEvent.ACTION_CANCEL||type==MotionEvent.ACTION_UP){
+            finishTextGesture(type==MotionEvent.ACTION_UP);
+            getParent().requestDisallowInterceptTouchEvent(false);
+            return true;
+        }
+        return true;
+    }
+    private void finishTextGesture(boolean commit){
+        if(textGesture==0)return;
+        if(textChanged&&drawing!=null&&selectedTextIndex>=0&&selectedTextIndex<drawing.texts.size()){
+            Model.TextItem changedItem=drawing.texts.get(selectedTextIndex);
+            Model.TextItem after=changedItem.copy();
+            if(!commit&&textBefore!=null)changedItem.assign(textBefore);
+            liveTextPreview=false;rebuild();
+            if(commit&&listener!=null&&textBefore!=null)
+                listener.endTextTransform(selectedTextIndex,textBefore,after);
+        } else liveTextPreview=false;
+        textGesture=0;textChanged=false;textBefore=null;resizeCorner=-1;
     }
     private void rect() {
         float scale = Math.min(Math.max(1, getWidth()-24f) / Model.WIDTH,
@@ -311,6 +454,15 @@ public final class DrawingView extends View {
             stagePaint.setColor(Color.WHITE);
             canvas.drawBitmap(cache,null,bounds,stagePaint);
         }
+        if(liveTextPreview&&drawing!=null&&selectedTextIndex>=0&&selectedTextIndex<drawing.texts.size()){
+            int saved=canvas.save();
+            canvas.clipRect(bounds);
+            canvas.translate(bounds.left,bounds.top);
+            canvas.scale(bounds.width()/Model.WIDTH,bounds.height()/Model.HEIGHT);
+            renderText(canvas,drawing.texts.get(selectedTextIndex));
+            canvas.restoreToCount(saved);
+        }
+        drawTextHandles(canvas);
     }
     private float sx(float x) {
         return Math.max(0,Math.min(Model.WIDTH,(x-bounds.left)*Model.WIDTH/Math.max(1,bounds.width())));
@@ -323,6 +475,7 @@ public final class DrawingView extends View {
         rect();
         int type=event.getActionMasked();
         if(type==MotionEvent.ACTION_POINTER_DOWN && event.getPointerCount()>=2){
+            if(textGesture!=0)finishTextGesture(true);
             // Stop an uncommitted brush stroke before beginning a pinch.
             if(stroke!=null){stroke=null;rebuild();}
             pinching=true;panning=false;suppressStrokeUntilUp=true;
@@ -361,6 +514,7 @@ public final class DrawingView extends View {
                 panning=false;return true;
             }
         }
+        if(textTransformMode)return textTouch(event);
         if (type == MotionEvent.ACTION_DOWN) {
             if (!bounds.contains(event.getX(),event.getY())) return false;
             if (listener != null) listener.startStroke();
