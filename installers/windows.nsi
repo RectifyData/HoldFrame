@@ -18,25 +18,33 @@ ShowUninstDetails show
 !define MUI_FINISHPAGE_RUN_TEXT "Launch HoldFrame now"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-Section "HoldFrame" SecApp
+Section "HoldFrame application (required)" SecApp
+  SectionIn RO
   SetOutPath "$INSTDIR"
   File /r "..\packaged\HoldFrame\*.*"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-  CreateDirectory "$SMPROGRAMS\HoldFrame"
-  CreateShortcut "$SMPROGRAMS\HoldFrame\HoldFrame.lnk" "$INSTDIR\HoldFrame.exe"
-  CreateShortcut "$SMPROGRAMS\HoldFrame\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
-  CreateShortcut "$DESKTOP\HoldFrame.lnk" "$INSTDIR\HoldFrame.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\HoldFrame" "DisplayName" "HoldFrame"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\HoldFrame" "UninstallString" '$"$INSTDIR\Uninstall.exe$"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\HoldFrame" "DisplayIcon" "$INSTDIR\HoldFrame.exe"
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\HoldFrame" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\HoldFrame" "NoRepair" 1
+SectionEnd
+
+Section "Start Menu shortcuts" SecStartMenu
+  CreateDirectory "$SMPROGRAMS\HoldFrame"
+  CreateShortcut "$SMPROGRAMS\HoldFrame\HoldFrame.lnk" "$INSTDIR\HoldFrame.exe"
+  CreateShortcut "$SMPROGRAMS\HoldFrame\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
+SectionEnd
+
+Section "Desktop shortcut" SecDesktop
+  CreateShortcut "$DESKTOP\HoldFrame.lnk" "$INSTDIR\HoldFrame.exe"
 SectionEnd
 
 Section "Uninstall"
