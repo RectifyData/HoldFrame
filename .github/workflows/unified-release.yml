@@ -101,18 +101,44 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            adb shell getprop ro.build.version.sdk
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
-            adb shell pm path dev.rectifydata.holdframe
-            adb shell am start -W -n dev.rectifydata.holdframe/.MainActivity
-            sleep 2
-            # An activity can return from am start and then crash immediately.
-            if ! adb shell pidof dev.rectifydata.holdframe; then
-              echo "::error::HoldFrame was not running after the Android 12 launch"
-              adb logcat -d -t 180 | grep -E -A 12 'FATAL EXCEPTION|dev.rectifydata.holdframe' | tail -n 85 || true
-              exit 1
-            fi
-            adb shell dumpsys activity activities | grep -E 'dev.rectifydata.holdframe|MainActivity' | head -n 12
+            set -e
+            echo "Testing the exact APK released by the Android job"
+            adb wait-for-device
+            adb shell getprop ro.build.version.sdk | tee emulator-sdk.txt
+            echo "INSTALL" | tee -a emulator-checkpoints.txt
+            adb install -r app/build/outputs/apk/debug/app-debug.apk 2>&1 | tee emulator-install.txt
+            echo "PACKAGE" | tee -a emulator-checkpoints.txt
+            adb shell pm path dev.rectifydata.holdframe 2>&1 | tee emulator-package.txt
+            echo "START" | tee -a emulator-checkpoints.txt
+            adb logcat -c || true
+            adb shell am start -W -n dev.rectifydata.holdframe/.MainActivity 2>&1 | tee emulator-start.txt
+            sleep 5
+            echo "RUNNING" | tee -a emulator-checkpoints.txt
+            adb shell pidof dev.rectifydata.holdframe 2>&1 | tee emulator-pid.txt
+            test -s emulator-pid.txt
+            echo "FOREGROUND" | tee -a emulator-checkpoints.txt
+            adb shell dumpsys activity activities > emulator-activities.txt
+            grep -E 'dev.rectifydata.holdframe|MainActivity' emulator-activities.txt | head -n 12
+            echo "SUCCESS" | tee -a emulator-checkpoints.txt
+      - name: Capture Android emulator failure evidence
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        run: |
+          {
+            echo '=== Emulator checkpoints ==='
+            cat emulator-checkpoints.txt 2>/dev/null || true
+            echo '=== ADB devices ==='
+            adb devices -l 2>&1 || true
+            for log in emulator-sdk.txt emulator-install.txt emulator-package.txt emulator-start.txt emulator-pid.txt; do
+              echo "=== $log ==="
+              tail -n 30 "$log" 2>/dev/null || true
+            done
+            echo '=== Android runtime crash stack ==='
+            adb logcat -d -t 400 -v time 2>/dev/null | grep -E -A 24 'FATAL EXCEPTION|AndroidRuntime|dev.rectifydata.holdframe|INSTALL_FAILED|ActivityNotFoundException' | tail -n 120 || true
+            echo '=== Emulator processes ==='
+            ps aux | grep -E 'qemu-system|emulator' | grep -v grep | head -n 10 || true
+          } > emulator-diagnostics.txt 2>&1
       - name: Report exact Android CI failure with build diagnostics
         if: failure()
         continue-on-error: true
@@ -142,6 +168,12 @@ jobs:
             echo '~~' '~~'
             echo 'APK size:'
             ls -lh app/build/outputs/apk/debug/*.apk 2>/dev/null || true
+            echo 'Android emulator install and launch report:'
+            if test -f emulator-diagnostics.txt; then
+              tail -n 200 emulator-diagnostics.txt | head -c 18000
+            else
+              echo 'No emulator diagnostics file. Emulation failed during setup or logs were unavailable.'
+            fi
           } > android-failure.md
           gh issue create -R "$GH_REPO" --title "HoldFrame Android error details ($GITHUB_RUN_NUMBER)" --body-file android-failure.md
       - name: Upload Android failure diagnostics
@@ -152,6 +184,7 @@ jobs:
           path: |
             android-build.log
             android-failure.md
+            emulator-*.txt
             app/build/reports/
           if-no-files-found: warn
       - uses: actions/upload-artifact@v4
