@@ -269,6 +269,32 @@ public final class Model {
             invalidateIndex();
             return index+inserted.size();
         }
+        /**
+         * Split the held exposure at a global, zero-based frame boundary.
+         * The second half shares the source drawing until edited (copy-on-write).
+         * Audio is tied to absolute time and remains unchanged.
+         *
+         * @return index of the new second exposure
+         * @throws IllegalArgumentException if the split is at a clip boundary
+         */
+        public int splitAt(int globalFrame) {
+            if (globalFrame<=0 || globalFrame>=totalFrames())
+                throw new IllegalArgumentException("Place the playhead inside a pose to split.");
+            if (timeline.size()>=MAX_EXPOSURES)
+                throw new IllegalStateException("Maximum number of poses reached.");
+            int at=indexAt(globalFrame);
+            int clipStart=clipStart(at);
+            Exposure original=timeline.get(at);
+            int left=globalFrame-clipStart;
+            if(left<=0 || left>=original.duration)
+                throw new IllegalArgumentException("Place the playhead inside a pose to split.");
+            int right=original.duration-left;
+            original.duration=left;
+            timeline.add(at+1,new Exposure(original.drawingId,right));
+            invalidateIndex();
+            return at+1;
+        }
+
         /** Copy-on-write: editing a pasted pose never mutates any other pasted pose. */
         public Drawing ensureEditable(int clipIndex) {
             Exposure clip = timeline.get(clipIndex);
