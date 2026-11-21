@@ -154,21 +154,29 @@ jobs:
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineAutoScrollTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineDragAndLayoutTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.FeatureTabsAndKeymapTest
-      - name: Create bundled-runtime Linux application
+      - name: Build Linux DEB installer with bundled Java
         shell: bash
         run: |
           set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y fakeroot dpkg-dev
           python3 -m pip install pillow
           python3 tools/generate_icon.py
           test -s assets/HoldFrame.png
-          mkdir -p release
-          jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --icon assets/HoldFrame.png --dest packaged --app-version "0.8.${{ github.run_number }}" --vendor RectifyData
-          tar -czf release/HoldFrame-Linux-bundled-Java.tar.gz -C packaged HoldFrame
-          test -s release/HoldFrame-Linux-bundled-Java.tar.gz
+          mkdir -p release packaged
+          jpackage --type deb --name HoldFrame --input dist --main-jar HoldFrame.jar \
+            --main-class dev.rectifydata.holdframe.windows.HoldFrame \
+            --icon assets/HoldFrame.png --dest packaged \
+            --app-version "0.8.${{ github.run_number }}" --vendor RectifyData \
+            --linux-package-name holdframe --linux-shortcut
+          deb="$(find packaged -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          test -n "$deb" && test -s "$deb"
+          cp "$deb" release/HoldFrame-Linux-amd64.deb
+          dpkg-deb --info release/HoldFrame-Linux-amd64.deb
       - uses: actions/upload-artifact@v4
         with:
           name: holdframe-build-linux
-          path: release/HoldFrame-Linux-bundled-Java.tar.gz
+          path: release/HoldFrame-Linux-amd64.deb
           if-no-files-found: error
 
   unified-release:
@@ -191,61 +199,46 @@ jobs:
           set -euo pipefail
           find collected -type f -printf '%p: %s bytes\n' | sort | tee artifact-layout.txt
           test "$(find collected -type f | wc -l)" -ge 5
-      - name: Assemble one ZIP with all platforms and checksums
+      - name: Prepare exactly three standalone platform installers
         id: assemble
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release
           python3 - <<'PY'
           from pathlib import Path
-          import hashlib, zipfile, os
-          run=os.environ['GITHUB_RUN_NUMBER']
-          target=Path(f'release/HoldFrame-v0.8.{run}-All-Platforms.zip')
-          required={
-            'holdframe-build-android/HoldFrame-Android12-LowRAM.apk':'Android/HoldFrame-Android12-LowRAM.apk',
-            'holdframe-build-windows/HoldFrame-Windows-Setup.exe':'Windows/HoldFrame-Windows-Setup.exe',
-            'holdframe-build-windows/HoldFrame-Windows-Portable.zip':'Windows/HoldFrame-Windows-Portable.zip',
-            'holdframe-build-windows/HoldFrame-cross-platform.jar':'Desktop/HoldFrame-cross-platform.jar',
-            'holdframe-build-linux/HoldFrame-Linux-bundled-Java.tar.gz':'Linux/HoldFrame-Linux-bundled-Java.tar.gz',
+          from shutil import copyfile
+          targets={
+              'holdframe-build-android/HoldFrame-Android12-LowRAM.apk':'HoldFrame-Android12-LowRAM.apk',
+              'holdframe-build-windows/HoldFrame-Windows-Setup.exe':'HoldFrame-Windows-Setup.exe',
+              'holdframe-build-linux/HoldFrame-Linux-amd64.deb':'HoldFrame-Linux-amd64.deb',
           }
-          sums=[]
-          readme=f'''HoldFrame v0.8.{run} -- all platforms in one release asset
-
-          Android: Android/HoldFrame-Android12-LowRAM.apk (Android 12+, API 31; debug-signed prerelease).
-          Windows: Windows/HoldFrame-Windows-Setup.exe (interactive installer with visible progress).
-          Windows portable: Windows/HoldFrame-Windows-Portable.zip (Java 17+).
-          Linux: Linux/HoldFrame-Linux-bundled-Java.tar.gz (bundled Java runtime).
-          Desktop: Desktop/HoldFrame-cross-platform.jar (Java 17+, Windows/Linux).
-
-          Both desktop builds use the windows branch, Android uses the android branch,
-          and the shared core/release coordinator live on main.
-          Android timeline now follows playback continuously and extends clips
-          at the right edge. Physical Android touch testing is still needed.
-          '''
-          with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6,allowZip64=True) as out:
-            for source,destination in required.items():
-              file=Path('collected')/source
-              if not file.is_file():
-                # GitHub artifacts may preserve one more source folder level.
-                artifact=Path('collected')/source.split('/')[0]
-                matches=list(artifact.rglob(Path(source).name))
-                if len(matches)!=1:
-                  raise RuntimeError(f'Missing or ambiguous platform artifact: {file}; matches={matches}')
-                file=matches[0]
-              if file.stat().st_size<1000:
-                raise RuntimeError(f'Empty platform artifact: {file}')
-              data=file.read_bytes()
-              out.writestr(destination,data)
-              sums.append(hashlib.sha256(data).hexdigest()+'  '+destination)
-            out.writestr('README.txt',readme)
-            out.writestr('SHA256SUMS.txt','\n'.join(sums)+'\n')
-          with zipfile.ZipFile(target) as verify:
-            assert verify.testzip() is None
-            assert len(verify.namelist())==7
-          print(f'Created {target} ({target.stat().st_size:,} bytes); all 3 platforms included.')
+          output=Path('release')
+          output.mkdir(exist_ok=True)
+          for source,name in targets.items():
+              direct=Path('collected')/source
+              if not direct.is_file():
+                  candidates=list((Path('collected')/source.split('/')[0]).rglob(name))
+                  if len(candidates)!=1:
+                      raise RuntimeError(f'Missing or ambiguous platform binary {source}: {candidates}')
+                  direct=candidates[0]
+              if direct.stat().st_size<1000:
+                  raise RuntimeError(f'Empty/invalid binary: {direct}')
+              copyfile(direct,output/name)
+              print(f'{name}: {(output/name).stat().st_size} bytes')
+          signatures={
+              'HoldFrame-Android12-LowRAM.apk':b'PK',
+              'HoldFrame-Windows-Setup.exe':b'MZ',
+              'HoldFrame-Linux-amd64.deb':b'!<arch>\\n',
+          }
+          for filename,header in signatures.items():
+              with (output/filename).open('rb') as f:
+                  if not f.read(len(header)).startswith(header):
+                      raise RuntimeError(f'{filename} failed file-signature verification')
+          actual={f.name for f in output.iterdir() if f.is_file()}
+          if actual!=set(targets.values()):
+              raise RuntimeError(f'Exactly three standalone assets are required; got {actual}')
           PY
-      - name: Publish one GitHub tag and one combined attachment
+      - name: Publish release with three individual attachments
         id: publish
         shell: bash
         env:
@@ -254,26 +247,53 @@ jobs:
         run: |
           set -euo pipefail
           tag="v0.8.${{ github.run_number }}"
-          asset="release/HoldFrame-$tag-All-Platforms.zip"
-          test -s "$asset"
-          # Create metadata separately, so a temporary large-file upload failure
-          # does not force another release or a second tag.
+          # One-time migration: replace the incorrect all-in-one ZIP on v0.8.6.
+          if gh release view "v0.8.6" >/dev/null 2>&1 && \
+              gh release view "v0.8.6" --json assets --jq '.assets[].name' | grep -q -- '-All-Platforms.zip'; then
+            tag="v0.8.6"
+          fi
+          notes="One release with three direct downloads: Android 12+ APK (debug-signed), Windows interactive installer EXE, and Debian/Ubuntu x86-64 DEB installer with bundled Java. Android follow-scroll updated; physical touch testing still pending."
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --target "$GITHUB_SHA" \
-              --title "HoldFrame $tag (Android, Windows, Linux)" \
-              --notes "One prerelease, one ZIP containing Android 12+ APK, interactive Windows installer, Windows portable app, Java JAR, bundled-runtime Linux app, checksums and README. Android timeline follow-scrolling fixed. Physical-device testing is pending." \
-              --prerelease 2>&1 | tee publish.log
+              --title "HoldFrame $tag (Android / Windows / Linux)" \
+              --notes "$notes" --prerelease 2>&1 | tee publish.log
           fi
-          for attempt in 1 2 3; do
-            if gh release upload "$tag" "$asset" --clobber 2>&1 | tee -a publish.log; then
-              echo "Uploaded the single combined release attachment."
-              exit 0
+          assets=(
+            release/HoldFrame-Android12-LowRAM.apk
+            release/HoldFrame-Windows-Setup.exe
+            release/HoldFrame-Linux-amd64.deb
+          )
+          for asset in "${assets[@]}"; do
+            test -s "$asset"
+            uploaded=0
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" "$asset" --clobber 2>&1 | tee -a publish.log; then
+                uploaded=1
+                break
+              fi
+              sleep 5
+            done
+            if [ "$uploaded" -ne 1 ]; then
+              echo "::error::Failed uploading $asset to $tag" | tee -a publish.log
+              exit 1
             fi
-            echo "Upload attempt $attempt failed" | tee -a publish.log
-            sleep 5
           done
-          echo "::error::Combined release upload failed; see publish.log."
-          exit 1
+          # Remove the previous all-in-one ZIP (and any other obsolete extras).
+          while IFS= read -r old; do
+            case "$old" in
+              HoldFrame-Android12-LowRAM.apk|HoldFrame-Windows-Setup.exe|HoldFrame-Linux-amd64.deb) ;;
+              *) gh release delete-asset "$tag" "$old" --yes 2>&1 | tee -a publish.log ;;
+            esac
+          done < <(gh release view "$tag" --json assets --jq '.assets[].name')
+          gh release edit "$tag" --title "HoldFrame $tag (Android / Windows / Linux)" \
+            --notes "$notes" --prerelease 2>&1 | tee -a publish.log
+          gh release view "$tag" --json assets --jq '.assets[].name' | sort > actual-assets.txt
+          printf '%s\\n' \
+            HoldFrame-Android12-LowRAM.apk \
+            HoldFrame-Linux-amd64.deb \
+            HoldFrame-Windows-Setup.exe > expected-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
+          echo "Confirmed: $tag contains exactly the 3 direct platform assets."
       - name: Diagnose unified archive or publication failure
         if: failure()
         continue-on-error: true
@@ -291,8 +311,8 @@ jobs:
             echo 'Downloaded artifact files:'
             if test -f artifact-layout.txt; then cat artifact-layout.txt; else find collected -maxdepth 4 -type f -print 2>/dev/null || true; fi
             echo
-            echo 'Generated ZIP files:'
-            ls -lh release/*.zip 2>/dev/null || true
+            echo 'Generated release assets:'
+            ls -lh release/* 2>/dev/null || true
             echo
             echo 'GitHub release API response:'
             if test -f publish.log; then tail -n 100 publish.log; else echo 'No publish.log (failure before release creation).'; fi
