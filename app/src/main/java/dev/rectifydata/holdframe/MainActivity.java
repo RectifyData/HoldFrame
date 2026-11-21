@@ -39,6 +39,7 @@ import android.widget.Toast;
 
 import dev.rectifydata.holdframe.core.Model;
 import dev.rectifydata.holdframe.core.ProjectIO;
+import dev.rectifydata.holdframe.core.ReleaseChecker;
 
 import java.io.File;
 import java.io.ByteArrayOutputStream;
@@ -64,6 +65,8 @@ public final class MainActivity extends Activity {
     private static final int IMPORT_IMAGE = 103;
     private static final int IMPORT_AUDIO = 104;
     private static final String SETTINGS_PREFS = "holdframe_settings";
+    private static final String AUTO_UPDATES_PREF = "check_updates_automatically";
+    private static final String UPDATE_CHECKED_AT = "last_update_check";
     private static final String LOW_RAM_PREFERENCE = "low_ram_preference";
     private long physicalRamBytes;
     private int lowRamPreference = RamProfile.AUTO;
@@ -178,6 +181,54 @@ public final class MainActivity extends Activity {
         toast(enabled ? "Low RAM mode enabled" : "Normal memory mode enabled");
     }
 
+    private void showZoom() {toast("Canvas zoom: "+Math.round(canvas.zoomLevel()*100)+"%");}
+    private void togglePanMode() {
+        canvas.setPanMode(!canvas.isPanMode());
+        toast(canvas.isPanMode()?"Pan mode: drag with one finger":"Draw mode: drag to draw");
+    }
+    private void showUpdatePreferences() {
+        SharedPreferences prefs=getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE);
+        CheckBox automatic=new CheckBox(this);
+        automatic.setText("Check GitHub for HoldFrame updates once per day");
+        automatic.setChecked(prefs.getBoolean(AUTO_UPDATES_PREF,true));
+        new AlertDialog.Builder(this).setTitle("Settings - Updates")
+            .setView(automatic).setNegativeButton("Cancel",null)
+            .setNeutralButton("Check now",(dialog,which)->checkUpdates(true))
+            .setPositiveButton("Save",(dialog,which)->prefs.edit()
+                .putBoolean(AUTO_UPDATES_PREF,automatic.isChecked()).apply()).show();
+    }
+    private void checkUpdatesOnLaunch() {
+        SharedPreferences prefs=getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE);
+        if(!prefs.getBoolean(AUTO_UPDATES_PREF,true))return;
+        long now=System.currentTimeMillis(),last=prefs.getLong(UPDATE_CHECKED_AT,0);
+        if(now-last<24L*60*60*1000 && last<=now)return;
+        prefs.edit().putLong(UPDATE_CHECKED_AT,now).apply();
+        checkUpdates(false);
+    }
+    private void checkUpdates(boolean manual) {
+        if(manual)toast("Checking GitHub releases...");
+        new Thread(()->{
+            try {
+                ReleaseChecker.Release latest=ReleaseChecker.check();
+                String local=getPackageManager().getPackageInfo(getPackageName(),0).versionName;
+                runOnUiThread(()->{
+                    if(isFinishing()||isDestroyed())return;
+                    if(latest.newerThan(local)) {
+                        new AlertDialog.Builder(this).setTitle("HoldFrame update available")
+                            .setMessage("Installed: "+local+"\nLatest: "+latest.tag+
+                                "\n\nBack up projects before replacing a debug-signed APK: a new build may use a different signing key.")
+                            .setNegativeButton("Later",null)
+                            .setPositiveButton("View release",(dialog,which)->{
+                                startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(latest.page)));
+                            }).show();
+                    } else if(manual)toast("HoldFrame is up to date ("+local+")");
+                });
+            } catch(Exception e) {
+                if(manual)runOnUiThread(()->toast("Update check unavailable: "+e.getClass().getSimpleName()));
+            }
+        },"holdframe-updates").start();
+    }
+
     @Override public void onLowMemory() {
         super.onLowMemory();
         clearTransientMemory(true);
@@ -213,6 +264,7 @@ public final class MainActivity extends Activity {
         loadAutosave();
         buildUI();
         refresh();
+        checkUpdatesOnLaunch();
     }
     private Button button(String text,Runnable handler) {
         Button button=new Button(this);
@@ -352,11 +404,17 @@ public final class MainActivity extends Activity {
                 menu.getMenu().add("Save as…").setOnMenuItemClickListener(i->{createDocument();return true;});
                 menu.getMenu().add("Memory settings").setOnMenuItemClickListener(i->{openSettings();return true;});
                 menu.getMenu().add("Keyboard keymaps").setOnMenuItemClickListener(i->{showKeymapSettings();return true;});
+                menu.getMenu().add("Check for updates").setOnMenuItemClickListener(i->{checkUpdates(true);return true;});
+                menu.getMenu().add("Update preferences").setOnMenuItemClickListener(i->{showUpdatePreferences();return true;});
                 break;
             case 1:
                 menu.getMenu().add("Import font").setOnMenuItemClickListener(i->{importFont();return true;});
                 menu.getMenu().add("Toggle onion skins").setOnMenuItemClickListener(i->{canvas.setOnionEnabled(!canvas.isOnionEnabled());return true;});
                 menu.getMenu().add("Edit existing text").setOnMenuItemClickListener(i->{chooseText();return true;});
+                menu.getMenu().add("Zoom in").setOnMenuItemClickListener(i->{canvas.changeZoom(1.25f);showZoom();return true;});
+                menu.getMenu().add("Zoom out").setOnMenuItemClickListener(i->{canvas.changeZoom(.8f);showZoom();return true;});
+                menu.getMenu().add("Fit canvas").setOnMenuItemClickListener(i->{canvas.resetZoom();showZoom();return true;});
+                menu.getMenu().add("Pan canvas (toggle)").setOnMenuItemClickListener(i->{togglePanMode();return true;});
                 break;
             case 2:
                 menu.getMenu().add("Duplicate pose").setOnMenuItemClickListener(i->{add(true);return true;});
@@ -399,6 +457,11 @@ public final class MainActivity extends Activity {
     private void openTools(View anchor) {
         PopupMenu menu=new PopupMenu(this,anchor);
         menu.getMenu().add("Settings / Low RAM mode").setOnMenuItemClickListener(item->{openSettings();return true;});
+        menu.getMenu().add("Check for updates").setOnMenuItemClickListener(item->{checkUpdates(true);return true;});
+        menu.getMenu().add("Zoom +").setOnMenuItemClickListener(item->{canvas.changeZoom(1.25f);showZoom();return true;});
+        menu.getMenu().add("Zoom -").setOnMenuItemClickListener(item->{canvas.changeZoom(.8f);showZoom();return true;});
+        menu.getMenu().add("Fit canvas").setOnMenuItemClickListener(item->{canvas.resetZoom();showZoom();return true;});
+        menu.getMenu().add("Pan canvas (toggle)").setOnMenuItemClickListener(item->{togglePanMode();return true;});
         menu.getMenu().add("Brush color").setOnMenuItemClickListener(item->{pickColor();return true;});
         menu.getMenu().add("Add text").setOnMenuItemClickListener(item->{editText(-1);return true;});
         menu.getMenu().add("Import image").setOnMenuItemClickListener(item->{importImage();return true;});
@@ -671,6 +734,10 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_O: openDocument();return true;
                 case KeyEvent.KEYCODE_S: saveDocument();return true;
                 case KeyEvent.KEYCODE_Z: undo();return true;
+                case KeyEvent.KEYCODE_EQUALS:
+                case KeyEvent.KEYCODE_PLUS: canvas.changeZoom(1.25f);return true;
+                case KeyEvent.KEYCODE_MINUS: canvas.changeZoom(.8f);return true;
+                case KeyEvent.KEYCODE_0: canvas.resetZoom();return true;
                 case KeyEvent.KEYCODE_Y: redo();return true;
                 default: break;
             }
