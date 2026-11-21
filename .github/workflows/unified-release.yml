@@ -72,10 +72,17 @@ jobs:
         run: |
           ./build.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows compilation failed' }
-      - name: Check committed Windows icon
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate Windows application icon
         shell: pwsh
         run: |
-          if (-not (Test-Path assets/HoldFrame.ico)) { throw 'Missing application icon' }
+          python -m pip install pillow
+          if ($LASTEXITCODE -ne 0) { throw 'Pillow installation failed' }
+          python tools/generate_icon.py
+          if ($LASTEXITCODE -ne 0) { throw 'Icon generation failed' }
+          if (-not (Test-Path assets/HoldFrame.ico)) { throw 'ICO generation failed' }
       - name: Create bundled-runtime Windows application
         shell: pwsh
         run: |
@@ -151,6 +158,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m pip install pillow
+          python3 tools/generate_icon.py
           test -s assets/HoldFrame.png
           mkdir -p release
           jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --icon assets/HoldFrame.png --dest packaged --app-version "0.8.${{ github.run_number }}" --vendor RectifyData
