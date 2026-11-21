@@ -26,17 +26,16 @@ public final class TimelineView extends View {
             if(!trackingPointer || (resizing<0 && !seeking))return;
             HorizontalScrollView parent=scroller();
             if(parent==null || parent.getWidth()<=0)return;
-            int margin=dp(48);
-            float speed=0;
-            if(pointerViewportX<margin)
-                speed=-Math.max(3,(margin-pointerViewportX)*.42f);
-            else if(pointerViewportX>parent.getWidth()-margin)
-                speed=Math.max(3,(pointerViewportX-(parent.getWidth()-margin))*.42f);
-            if(speed==0)return;
-            int old=parent.getScrollX();
-            parent.scrollTo(Math.max(0,old+Math.round(speed)),0);
-            if(parent.getScrollX()!=old) {
-                applyDragX(parent.getScrollX()+pointerViewportX);
+            int step=TimelineScrollPolicy.edgeStep(pointerViewportX,parent.getWidth(),dp(48));
+            if(step!=0) {
+                int before=parent.getScrollX();
+                parent.scrollTo(Math.max(0,before+step),0);
+                if(parent.getScrollX()!=before) {
+                    applyDragX(parent.getScrollX()+pointerViewportX);
+                } else if(resizing>=0 && step>0) {
+                    // At the right limit, grow the clip to unlock more scroll room.
+                    applyDragX(parent.getScrollX()+pointerViewportX+step);
+                }
                 invalidate();
             }
             if(trackingPointer)postDelayed(this,SCROLL_TICK_MS);
@@ -54,19 +53,25 @@ public final class TimelineView extends View {
         removeCallbacks(edgeScrollTick);
         postDelayed(edgeScrollTick,SCROLL_TICK_MS);
     }
-    /** Scroll to reveal the active playhead, including during playback and keyboard stepping. */
-    void followFrame(final int selectedFrame) {
+    private int pendingFollowFrame=-1;
+    private boolean followPosted;
+    /** Continuously keep the playhead near 60% of the visible timeline. */
+    void followFrame(int selectedFrame) {
         if(trackingPointer)return;
-        post(()->{
-            if(trackingPointer)return;
-            HorizontalScrollView parent=scroller();
-            if(parent==null || parent.getWidth()<=0)return;
-            int x=Math.round(dp(12)+selectedFrame*unit);
-            int left=parent.getScrollX();
-            int margin=Math.min(dp(68),Math.max(dp(8),parent.getWidth()/5));
-            if(x<left+margin)parent.scrollTo(Math.max(0,x-margin),0);
-            else if(x>left+parent.getWidth()-margin)
-                parent.scrollTo(Math.max(0,x-parent.getWidth()+margin),0);
+        pendingFollowFrame=selectedFrame;
+        HorizontalScrollView parent=scroller();
+        if(parent==null||followPosted)return;
+        followPosted=true;
+        parent.postOnAnimation(()->{
+            followPosted=false;
+            if(trackingPointer||pendingFollowFrame<0)return;
+            HorizontalScrollView scroll=scroller();
+            if(scroll==null||scroll.getWidth()<=0)return;
+            int pixel=Math.round(dp(12)+pendingFollowFrame*unit);
+            ViewGroup.LayoutParams layout=getLayoutParams();
+            int width=Math.max(getWidth(),layout==null?0:layout.width);
+            int target=TimelineScrollPolicy.followTarget(scroll.getWidth(),width,pixel);
+            if(target!=scroll.getScrollX())scroll.scrollTo(target,0);
         });
     }
     private void applyDragX(float x) {

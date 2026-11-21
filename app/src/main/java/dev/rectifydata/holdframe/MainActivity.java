@@ -734,6 +734,7 @@ public final class MainActivity extends Activity {
         playbackOriginNanos=System.nanoTime();
         playButton.setText("■ Stop");
         canvas.setOnionPlaying(true);
+        timeline.followFrame(currentFrame);
         syncAudio();
         handler.postDelayed(playback,16);
     }

@@ -1,4 +1,4 @@
-name: HoldFrame Android API 31 build and prerelease
+name: HoldFrame Android CI (unified release)
 on:
   push:
     branches: [android]
@@ -71,7 +71,9 @@ jobs:
           set -euo pipefail
           mkdir -p out/ram
           javac -d out/ram app/src/main/java/dev/rectifydata/holdframe/RamProfile.java app/src/test/java/dev/rectifydata/holdframe/RamProfileTest.java
-          java -cp out/ram dev.rectifydata.holdframe.RamProfileTest 2>&1 | tee ram-tests.log
+          java -cp out/ram dev.rectifydata.holdframe.RamProfileTest
+          javac --release 17 -d out/ram app/src/main/java/dev/rectifydata/holdframe/TimelineScrollPolicy.java app/src/test/java/dev/rectifydata/holdframe/TimelineScrollPolicyTest.java
+          java -cp out/ram dev.rectifydata.holdframe.TimelineScrollPolicyTest 2>&1 | tee ram-tests.log
           grep -Eq 'minSdk[[:space:]]*=[[:space:]]*31' app/build.gradle.kts
       - name: Compile Android APK (keep full diagnostics)
         id: apk
@@ -156,17 +158,3 @@ jobs:
           name: HoldFrame-Android12-LowRAM-${{ github.run_number }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-      - name: Publish GitHub prerelease
-        if: github.ref == 'refs/heads/android'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="android-v0.7.${{ github.run_number }}-r${{ github.run_attempt }}"
-          gh release create "$tag" \
-            app/build/outputs/apk/debug/app-debug.apk \
-            --target "$GITHUB_SHA" \
-            --title "HoldFrame Android 12 tabs and keymaps preview ${{ github.run_number }}" \
-            --notes "Android 12+ (minimum API 31). Feature tabs (File/Draw/Animate/Media), Android timeline follow-scroll, hardware keyboard keymap presets, and automatic Low RAM mode on devices with <=6 GiB. Debug-signed testing APK, not yet validated on a physical phone." \
-            --prerelease
