@@ -77,6 +77,54 @@ public final class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, Deque<Model.Stroke>> redos = new HashMap<>();
     private final Map<String, Deque<Model.Stroke>> undos = new HashMap<>();
+    private static final int HISTORY_STROKE=1,HISTORY_TEXT=2;
+    private static final class TextEdit {
+        final int index;
+        final Model.TextItem before,after;
+        TextEdit(int index,Model.TextItem before,Model.TextItem after){
+            this.index=index;
+            this.before=before==null?null:before.copy();
+            this.after=after==null?null:after.copy();
+        }
+    }
+    private final Map<String,Deque<TextEdit>> textUndos=new HashMap<>(),textRedos=new HashMap<>();
+    private final Map<String,Deque<Integer>> undoOrder=new HashMap<>(),redoOrder=new HashMap<>();
+    private void trimHistory(String id,Deque<Integer> order,boolean redo){
+        int limit=RamProfile.undoLimit(lowRamEnabled);
+        while(order.size()>limit){
+            int kind=order.removeLast();
+            if(kind==HISTORY_TEXT){
+                Deque<TextEdit> h=(redo?textRedos:textUndos).get(id);
+                if(h!=null&&!h.isEmpty())h.removeLast();
+            } else {
+                Deque<Model.Stroke> h=(redo?redos:undos).get(id);
+                if(h!=null&&!h.isEmpty())h.removeLast();
+            }
+        }
+    }
+    private void recordAction(String id,int kind){
+        Deque<Integer> order=undoOrder.computeIfAbsent(id,k->new ArrayDeque<>());
+        order.push(kind);trimHistory(id,order,false);
+        redoOrder.remove(id);redos.remove(id);textRedos.remove(id);
+    }
+    private void recordTextEdit(Model.Drawing editable,int index,Model.TextItem before,Model.TextItem after){
+        textUndos.computeIfAbsent(editable.id,k->new ArrayDeque<>())
+            .push(new TextEdit(index,before,after));
+        recordAction(editable.id,HISTORY_TEXT);
+    }
+    private void applyTextEdit(Model.Drawing editable,TextEdit change,boolean undo){
+        Model.TextItem value=undo?change.before:change.after;
+        if(value==null){
+            if(change.index>=0&&change.index<editable.texts.size())
+                editable.texts.remove(change.index);
+        } else if(change.index>=0&&change.index<editable.texts.size()){
+            editable.texts.get(change.index).assign(value);
+        } else if(change.index==editable.texts.size()){
+            editable.texts.add(value.copy());
+        }
+        canvas.setDrawing(editable);
+        canvas.rebuild();
+    }
     private Model.ClipboardSequence clipboard;
     private int selectedFrom=-1, selectedTo=-1;
     private Model.Project model = new Model.Project();
@@ -182,6 +230,12 @@ public final class MainActivity extends Activity {
     }
 
     private void showZoom() {toast("Canvas zoom: "+Math.round(canvas.zoomLevel()*100)+"%");}
+    private void toggleTextTransformMode(){
+        stopPlayback();
+        boolean enable=!canvas.isTextTransformMode();
+        canvas.setTextTransformMode(enable);
+        toast(enable?"Text: tap to select, drag to move, resize from four corners":"Text transform off");
+    }
     private void togglePanMode() {
         canvas.setPanMode(!canvas.isPanMode());
         toast(canvas.isPanMode()?"Pan mode: drag with one finger":"Draw mode: drag to draw");
@@ -320,7 +374,15 @@ public final class MainActivity extends Activity {
                     history.push(drawing.strokes.get(drawing.strokes.size()-1));
                     while (history.size()>RamProfile.undoLimit(lowRamEnabled)) history.removeLast();
                 }
-                redos.remove(drawing.id);
+                recordAction(drawing.id,HISTORY_STROKE);
+                changed();
+            }
+            @Override public void beginTextTransform(){
+                stopPlayback();
+                canvas.setDrawing(model.ensureEditable(selected));
+            }
+            @Override public void endTextTransform(int index,Model.TextItem before,Model.TextItem after){
+                recordTextEdit(model.drawingAt(selected),index,before,after);
                 changed();
             }
         });
@@ -410,6 +472,8 @@ public final class MainActivity extends Activity {
             case 1:
                 menu.getMenu().add("Import font").setOnMenuItemClickListener(i->{importFont();return true;});
                 menu.getMenu().add("Toggle onion skins").setOnMenuItemClickListener(i->{canvas.setOnionEnabled(!canvas.isOnionEnabled());return true;});
+                menu.getMenu().add(canvas.isTextTransformMode()?"Finish text transform":"Move / resize text")
+                    .setOnMenuItemClickListener(i->{toggleTextTransformMode();return true;});
                 menu.getMenu().add("Edit existing text").setOnMenuItemClickListener(i->{chooseText();return true;});
                 menu.getMenu().add("Zoom in").setOnMenuItemClickListener(i->{canvas.changeZoom(1.25f);showZoom();return true;});
                 menu.getMenu().add("Zoom out").setOnMenuItemClickListener(i->{canvas.changeZoom(.8f);showZoom();return true;});
@@ -424,6 +488,12 @@ public final class MainActivity extends Activity {
                 menu.getMenu().add("Redo").setOnMenuItemClickListener(i->{redo();return true;});
                 break;
             default:
+                menu.getMenu().add(canvas.isTextTransformMode()?"Finish text transform":"Move / resize text")
+                    .setOnMenuItemClickListener(i->{toggleTextTransformMode();return true;});
+                menu.getMenu().add("Edit selected text").setOnMenuItemClickListener(i->{
+                    int index=canvas.selectedTextIndex();
+                    if(index>=0)editText(index);else chooseText();return true;
+                });
                 menu.getMenu().add("Edit text").setOnMenuItemClickListener(i->{chooseText();return true;});
                 menu.getMenu().add("Move/resize image").setOnMenuItemClickListener(i->{editImagePlacement();return true;});
                 menu.getMenu().add("Remove audio").setOnMenuItemClickListener(i->{removeAudio();return true;});
@@ -447,7 +517,7 @@ public final class MainActivity extends Activity {
     private void showKeymapReference() {
         String common="Ctrl+S Save · Ctrl+O Open · Ctrl+N New project\n"
             +"Ctrl+C Copy · Ctrl+V Paste · Ctrl+D Duplicate\n"
-            +"Ctrl+Z Undo · Ctrl+Y Redo · Ctrl+1–4 Tabs\n"
+            +"Ctrl+Z Undo · Ctrl+Y Redo · Ctrl+T Transform Text · Ctrl+1–4 Tabs\n"
             +"←/→ Step frame · Space Play/Pause";
         String extra="\n\nAnimation preset: J Add pose · K Duplicate · L Play/Pause · [ / ] Step frame";
         new AlertDialog.Builder(this).setTitle("Keyboard shortcuts")
@@ -468,6 +538,8 @@ public final class MainActivity extends Activity {
         menu.getMenu().add("Add audio").setOnMenuItemClickListener(item->{importAudio();return true;});
         menu.getMenu().add("Remove audio").setOnMenuItemClickListener(item->{removeAudio();return true;});
         menu.getMenu().add("Edit image placement").setOnMenuItemClickListener(item->{editImagePlacement();return true;});
+        menu.getMenu().add(canvas.isTextTransformMode()?"Finish text transform":"Move / resize text")
+            .setOnMenuItemClickListener(item->{toggleTextTransformMode();return true;});
         menu.getMenu().add("Edit existing text").setOnMenuItemClickListener(item->{chooseText();return true;});
         menu.getMenu().add("Import font (.ttf/.otf)")
             .setOnMenuItemClickListener(item->{importFont();return true;});
@@ -553,6 +625,8 @@ public final class MainActivity extends Activity {
                 int style=(bold.isChecked()?1:0)|(italic.isChecked()?2:0);
                 String chosenFamily=family.getText().toString().trim();
                 if (chosenFamily.isEmpty()) chosenFamily="sans-serif";
+                Model.TextItem old=index<0?null:editable.texts.get(index).copy();
+                int textIndex=index<0?editable.texts.size():index;
                 if (index<0) {
                     Model.TextItem item=new Model.TextItem(content,chosenFamily,importedFontPath,
                         style,colors[color.getSelectedItemPosition()],textSize,140,120);
@@ -567,9 +641,11 @@ public final class MainActivity extends Activity {
                     // Keep an existing imported font unless the user imports a new one.
                     if (!importedFontPath.isEmpty()) item.fontPath=importedFontPath;
                 }
+                recordTextEdit(editable,textIndex,old,editable.texts.get(textIndex));
                 canvas.setDrawing(editable);
                 canvas.rebuild();
                 changed();
+                canvas.selectText(textIndex);
             }).show();
     }
     private void importFont() {
@@ -734,6 +810,7 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_O: openDocument();return true;
                 case KeyEvent.KEYCODE_S: saveDocument();return true;
                 case KeyEvent.KEYCODE_Z: undo();return true;
+                case KeyEvent.KEYCODE_T: toggleTextTransformMode();return true;
                 case KeyEvent.KEYCODE_EQUALS:
                 case KeyEvent.KEYCODE_PLUS: canvas.changeZoom(1.25f);return true;
                 case KeyEvent.KEYCODE_MINUS: canvas.changeZoom(.8f);return true;
@@ -770,28 +847,60 @@ public final class MainActivity extends Activity {
         currentFrame=model.clipStart(selected);
         changed();
     }
-    private void undo() {
+    private void undo(){
         stopPlayback();
         Model.Drawing drawing=model.drawingAt(selected);
-        Deque<Model.Stroke> history=undos.get(drawing.id);
-        if (history==null || history.isEmpty()) return;
-        Model.Stroke last=history.pop();
-        if (!drawing.strokes.remove(last)) return;
-        redos.computeIfAbsent(drawing.id,key->new ArrayDeque<>()).push(last);
-        canvas.rebuild();
+        Deque<Integer> order=undoOrder.get(drawing.id);
+        int kind=order==null||order.isEmpty()?HISTORY_STROKE:order.peek();
+        if(kind==HISTORY_TEXT){
+            Deque<TextEdit> h=textUndos.get(drawing.id);
+            if(h==null||h.isEmpty())return;
+            TextEdit edit=h.pop();
+            if(order!=null&&!order.isEmpty())order.pop();
+            Model.Drawing editable=model.ensureEditable(selected);
+            applyTextEdit(editable,edit,true);
+            textRedos.computeIfAbsent(editable.id,k->new ArrayDeque<>()).push(edit);
+            Deque<Integer> target=redoOrder.computeIfAbsent(editable.id,k->new ArrayDeque<>());
+            target.push(HISTORY_TEXT);trimHistory(editable.id,target,true);
+        } else {
+            Deque<Model.Stroke> h=undos.get(drawing.id);
+            if(h==null||h.isEmpty())return;
+            Model.Stroke stroke=h.pop();
+            if(!drawing.strokes.remove(stroke))return;
+            if(order!=null&&!order.isEmpty())order.pop();
+            redos.computeIfAbsent(drawing.id,k->new ArrayDeque<>()).push(stroke);
+            Deque<Integer> target=redoOrder.computeIfAbsent(drawing.id,k->new ArrayDeque<>());
+            target.push(HISTORY_STROKE);trimHistory(drawing.id,target,true);
+            canvas.rebuild();
+        }
         changed();
     }
-    private void redo() {
+    private void redo(){
         stopPlayback();
         Model.Drawing drawing=model.drawingAt(selected);
-        Deque<Model.Stroke> stack=redos.get(drawing.id);
-        if (stack==null || stack.isEmpty()) return;
-        Model.Stroke last=stack.pop();
-        drawing.strokes.add(last);
-        Deque<Model.Stroke> history = undos.computeIfAbsent(drawing.id,key->new ArrayDeque<>());
-        history.push(last);
-        while (history.size()>RamProfile.undoLimit(lowRamEnabled)) history.removeLast();
-        canvas.rebuild();
+        Deque<Integer> order=redoOrder.get(drawing.id);
+        int kind=order==null||order.isEmpty()?HISTORY_STROKE:order.peek();
+        if(kind==HISTORY_TEXT){
+            Deque<TextEdit> h=textRedos.get(drawing.id);
+            if(h==null||h.isEmpty())return;
+            TextEdit edit=h.pop();
+            if(order!=null&&!order.isEmpty())order.pop();
+            Model.Drawing editable=model.ensureEditable(selected);
+            applyTextEdit(editable,edit,false);
+            textUndos.computeIfAbsent(editable.id,k->new ArrayDeque<>()).push(edit);
+            Deque<Integer> target=undoOrder.computeIfAbsent(editable.id,k->new ArrayDeque<>());
+            target.push(HISTORY_TEXT);trimHistory(editable.id,target,false);
+        } else {
+            Deque<Model.Stroke> h=redos.get(drawing.id);
+            if(h==null||h.isEmpty())return;
+            Model.Stroke stroke=h.pop();
+            if(order!=null&&!order.isEmpty())order.pop();
+            drawing.strokes.add(stroke);
+            undos.computeIfAbsent(drawing.id,k->new ArrayDeque<>()).push(stroke);
+            Deque<Integer> target=undoOrder.computeIfAbsent(drawing.id,k->new ArrayDeque<>());
+            target.push(HISTORY_STROKE);trimHistory(drawing.id,target,false);
+            canvas.rebuild();
+        }
         changed();
     }
     private void togglePlayback() {
@@ -890,7 +999,7 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("New project")
             .setMessage("Start a new project? Save the current project to a file first if you want to keep it.")
             .setNegativeButton("Cancel",null).setPositiveButton("Create",(d,w)->{
-                model=new Model.Project(); redos.clear(); undos.clear(); documentUri=null;
+                model=new Model.Project(); redos.clear(); undos.clear();textUndos.clear();textRedos.clear();undoOrder.clear();redoOrder.clear(); documentUri=null;
                 selected=currentFrame=0;selectedFrom=selectedTo=-1;
                 canvas.setDrawing(null);
                 changed();
@@ -934,7 +1043,7 @@ public final class MainActivity extends Activity {
             try (InputStream stream=getContentResolver().openInputStream(uri)) {
                 if (stream==null) throw new IOException("Could not open document");
                 Model.Project loaded=ProjectIO.read(stream);
-                stopPlayback();model=loaded;documentUri=uri;redos.clear(); undos.clear();selected=currentFrame=0;selectedFrom=selectedTo=-1;
+                stopPlayback();model=loaded;documentUri=uri;redos.clear(); undos.clear();textUndos.clear();textRedos.clear();undoOrder.clear();redoOrder.clear();selected=currentFrame=0;selectedFrom=selectedTo=-1;
                 canvas.setDrawing(null);changed();
                 toast("Project opened");
             } catch (IOException e) {
