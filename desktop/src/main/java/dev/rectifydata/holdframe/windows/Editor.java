@@ -225,6 +225,7 @@ public final class Editor extends JFrame {
             public void redo() { drawing.texts.add(item); }
         });
         stage.invalidateDrawing();
+        stage.selectOnlyText(item);
     }
     void changeText(int textIndex,Model.TextItem updated) {
         stopPlayback();
