@@ -451,7 +451,6 @@ public final class MainActivity extends Activity {
                 break;
             case 2:
                 actionButton("+ Pose",()->add(false));
-                actionButton("Split",this::splitAtPlayhead);
                 actionButton("Copy",this::copyPose);
                 actionButton("Paste",this::pastePose);
                 actionButton("More ▾",()->showFeatureMenu(2));
