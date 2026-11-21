@@ -1,0 +1,238 @@
+name: HoldFrame unified Windows Linux Android release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: holdframe-unified-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Set up preinstalled Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          test -d "$SDK_ROOT"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" --install 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Validate Android 12 minimum and scroll policy
+        run: |
+          set -euo pipefail
+          grep -Eq 'minSdk[[:space:]]*=[[:space:]]*31' app/build.gradle.kts
+          mkdir -p build/policy-tests
+          javac --release 17 -d build/policy-tests app/src/main/java/dev/rectifydata/holdframe/RamProfile.java app/src/main/java/dev/rectifydata/holdframe/TimelineScrollPolicy.java app/src/test/java/dev/rectifydata/holdframe/RamProfileTest.java app/src/test/java/dev/rectifydata/holdframe/TimelineScrollPolicyTest.java
+          java -cp build/policy-tests dev.rectifydata.holdframe.RamProfileTest
+          java -cp build/policy-tests dev.rectifydata.holdframe.TimelineScrollPolicyTest
+      - name: Build and sign Android APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --console=plain :app:assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
+          mkdir -p release
+          cp app/build/outputs/apk/debug/app-debug.apk release/HoldFrame-Android12-LowRAM.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holdframe-build-android
+          path: release/HoldFrame-Android12-LowRAM.apk
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: windows
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile Windows and cross-platform Java app
+        shell: pwsh
+        run: |
+          ./build.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows compilation failed' }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate original app icon
+        shell: pwsh
+        run: |
+          python -m pip install pillow
+          if ($LASTEXITCODE -ne 0) { throw 'Pillow installation failed' }
+          python tools/generate_icon.py
+          if ($LASTEXITCODE -ne 0) { throw 'Icon generation failed' }
+      - name: Create bundled-runtime Windows application
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version "0.8.${{ github.run_number }}" --vendor RectifyData --icon assets/HoldFrame.ico
+          if ($LASTEXITCODE -ne 0) { throw 'jpackage failed' }
+      - name: Build visible Windows installer
+        shell: pwsh
+        run: |
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) {
+            choco install nsis -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          }
+          if (-not (Test-Path $nsis)) { throw 'NSIS executable not found' }
+          Push-Location installers
+          & $nsis windows.nsi
+          $status = $LASTEXITCODE
+          Pop-Location
+          if ($status -ne 0) { throw "NSIS build failed: $status" }
+          Copy-Item release/HoldFrame-Setup.exe release/HoldFrame-Windows-Setup.exe
+      - name: Package portable Windows app and cross-platform JAR
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item dist/HoldFrame.jar staging/HoldFrame.jar
+          Copy-Item launch.bat staging/launch.bat
+          Copy-Item launch.sh staging/launch.sh
+          Copy-Item README.md staging/README.md
+          Compress-Archive -Path staging/* -DestinationPath release/HoldFrame-Windows-Portable.zip -Force
+          Copy-Item dist/HoldFrame.jar release/HoldFrame-cross-platform.jar
+          foreach ($file in @("HoldFrame-Windows-Setup.exe","HoldFrame-Windows-Portable.zip","HoldFrame-cross-platform.jar")) {
+            if (-not (Test-Path "release/$file")) { throw "Missing $file" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holdframe-build-windows
+          path: |
+            release/HoldFrame-Windows-Setup.exe
+            release/HoldFrame-Windows-Portable.zip
+            release/HoldFrame-cross-platform.jar
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: windows
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Compile Linux desktop
+        run: bash build.sh
+      - name: Verify core, exports, tabs and timeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          javac --release 17 -cp build/classes -d build/classes core/src/test/java/dev/rectifydata/holdframe/core/*.java desktop/src/test/java/dev/rectifydata/holdframe/windows/*.java
+          java -cp build/classes dev.rectifydata.holdframe.core.CoreTest
+          java -cp build/classes dev.rectifydata.holdframe.core.MediaCoreTest
+          java -cp build/classes dev.rectifydata.holdframe.core.SequenceClipboardTest
+          java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.ExportSupportTest
+          if ! command -v xvfb-run >/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y xvfb
+          fi
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineAutoScrollTest
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineDragAndLayoutTest
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.FeatureTabsAndKeymapTest
+      - name: Create bundled-runtime Linux application
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user pillow
+          python3 tools/generate_icon.py
+          mkdir -p release
+          jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --icon assets/HoldFrame.png --dest packaged --app-version "0.8.${{ github.run_number }}" --vendor RectifyData
+          tar -czf release/HoldFrame-Linux-bundled-Java.tar.gz -C packaged HoldFrame
+          test -s release/HoldFrame-Linux-bundled-Java.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holdframe-build-linux
+          path: release/HoldFrame-Linux-bundled-Java.tar.gz
+          if-no-files-found: error
+
+  unified-release:
+    needs: [android, windows, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: holdframe-build-*
+          path: collected
+          merge-multiple: false
+      - name: Assemble one ZIP with all platforms and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile, os
+          run=os.environ['GITHUB_RUN_NUMBER']
+          target=Path(f'release/HoldFrame-v0.8.{run}-All-Platforms.zip')
+          required={
+            'holdframe-build-android/HoldFrame-Android12-LowRAM.apk':'Android/HoldFrame-Android12-LowRAM.apk',
+            'holdframe-build-windows/HoldFrame-Windows-Setup.exe':'Windows/HoldFrame-Windows-Setup.exe',
+            'holdframe-build-windows/HoldFrame-Windows-Portable.zip':'Windows/HoldFrame-Windows-Portable.zip',
+            'holdframe-build-windows/HoldFrame-cross-platform.jar':'Desktop/HoldFrame-cross-platform.jar',
+            'holdframe-build-linux/HoldFrame-Linux-bundled-Java.tar.gz':'Linux/HoldFrame-Linux-bundled-Java.tar.gz',
+          }
+          sums=[]
+          readme=f'''HoldFrame v0.8.{run} -- all platforms in one release asset
+
+          Android: Android/HoldFrame-Android12-LowRAM.apk (Android 12+, API 31; debug-signed prerelease).
+          Windows: Windows/HoldFrame-Windows-Setup.exe (interactive installer with visible progress).
+          Windows portable: Windows/HoldFrame-Windows-Portable.zip (Java 17+).
+          Linux: Linux/HoldFrame-Linux-bundled-Java.tar.gz (bundled Java runtime).
+          Desktop: Desktop/HoldFrame-cross-platform.jar (Java 17+, Windows/Linux).
+
+          Both desktop builds use the windows branch, Android uses the android branch,
+          and the shared core/release coordinator live on main.
+          Android timeline now follows playback continuously and extends clips
+          at the right edge. Physical Android touch testing is still needed.
+          '''
+          with zipfile.ZipFile(target,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6,allowZip64=True) as out:
+            for source,destination in required.items():
+              file=Path('collected')/source
+              if not file.is_file() or file.stat().st_size<1000:
+                raise RuntimeError(f'Missing or empty platform artifact: {file}')
+              data=file.read_bytes()
+              out.writestr(destination,data)
+              sums.append(hashlib.sha256(data).hexdigest()+'  '+destination)
+            out.writestr('README.txt',readme)
+            out.writestr('SHA256SUMS.txt','\n'.join(sums)+'\n')
+          with zipfile.ZipFile(target) as verify:
+            assert verify.testzip() is None
+            assert len(verify.namelist())==7
+          print(f'Created {target} ({target.stat().st_size:,} bytes); all 3 platforms included.')
+          PY
+      - name: Publish one GitHub tag, one attachment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v0.8.${{ github.run_number }}"
+          asset="release/HoldFrame-$tag-All-Platforms.zip"
+          gh release create "$tag" "$asset" --target "$GITHUB_SHA" \
+            --title "HoldFrame $tag (Android, Windows, Linux)" \
+            --notes "One release, one ZIP attachment with the Android 12+ APK, Windows visible installer and portable app, Linux app with bundled Java, cross-platform JAR, README and checksums. Android timeline now continuously follows playback. Prerelease; physical-device verification pending." \
+            --prerelease

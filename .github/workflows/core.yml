@@ -1,4 +1,4 @@
-name: Shared core tests and prerelease
+name: HoldFrame shared core CI
 on:
   push:
     branches: [main]
@@ -30,12 +30,3 @@ jobs:
         with:
           name: HoldFrame-shared-core
           path: release/HoldFrame-core.jar
-      - name: Publish core prerelease
-        if: github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "core-v0.4.${{ github.run_number }}" release/HoldFrame-core.jar \
-            --target "$GITHUB_SHA" --title "HoldFrame shared core v0.4.${{ github.run_number }}" \
-            --notes "Portable HFM4 animation library with ordered multi-pose clipboard, image deduplication, editable text and audio timeline references. Prerelease." \
-            --prerelease
