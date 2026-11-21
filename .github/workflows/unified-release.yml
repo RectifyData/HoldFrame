@@ -46,9 +46,53 @@ jobs:
           set -euo pipefail
           gradle --no-daemon --console=plain :app:assembleDebug
           test -s app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | tee apk-badging.txt
+          grep -q "package: name='dev.rectifydata.holdframe'" apk-badging.txt
+          grep -q "sdkVersion:'31'" apk-badging.txt
+          unzip -t app/build/outputs/apk/debug/app-debug.apk | tail -n 2
           mkdir -p release
           cp app/build/outputs/apk/debug/app-debug.apk release/HoldFrame-Android12-LowRAM.apk
+      - name: Compare previous-release signing identity
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p previous
+          if gh release download v0.8.6 --pattern 'HoldFrame-Android12-LowRAM.apk' --dir previous; then
+            previous_cert=$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs previous/HoldFrame-Android12-LowRAM.apk | grep 'Signer #1 certificate SHA-256 digest' || true)
+            current_cert=$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep 'Signer #1 certificate SHA-256 digest' || true)
+            echo "Previously released APK: $previous_cert"
+            echo "New APK: $current_cert"
+            if test -n "$previous_cert" && test "$previous_cert" != "$current_cert"; then
+              echo "::warning::DEBUG SIGNING KEY ROTATED. This APK cannot upgrade the previously installed HoldFrame APK in place."
+            fi
+          fi
+      - name: Enable KVM acceleration for Android emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Fresh install and launch on Android 12 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 31
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb shell getprop ro.build.version.sdk
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb shell pm path dev.rectifydata.holdframe
+            adb shell am start -W -n dev.rectifydata.holdframe/.MainActivity
+            sleep 2
+            adb shell dumpsys activity activities | grep -E 'dev.rectifydata.holdframe|MainActivity' | head -n 12
       - uses: actions/upload-artifact@v4
         with:
           name: holdframe-build-android
