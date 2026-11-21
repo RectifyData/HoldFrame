@@ -470,6 +470,7 @@ public final class Editor extends JFrame {
         shortcut("Paste poses","control V",this::pasteFrame);
         shortcut("Add pose","control N",()->add(false));
         shortcut("Duplicate pose","control D",()->add(true));
+        shortcut("Split at playhead","control B",this::splitAtPlayhead);
         shortcut("Previous frame","LEFT",()->seek(frame-1));
         shortcut("Next frame","RIGHT",()->seek(frame+1));
         shortcut("Play / Pause","SPACE",this::togglePlayback);
@@ -627,6 +628,7 @@ public final class Editor extends JFrame {
         item(edit,"Select all timeline poses (Ctrl+Shift+A)",this::selectAllTimeline);
         item(edit,"Add blank drawing",()->add(false));
         item(edit,"Duplicate drawing",()->add(true));
+        item(edit,"Split pose at playhead (Ctrl+B)",this::splitAtPlayhead);
         item(edit,"Delete drawing",this::remove);
         JMenu view = new JMenu("View");
         item(view,"Zoom in (Ctrl++)",()->stage.zoomBy(1.25f));
@@ -707,6 +709,7 @@ public final class Editor extends JFrame {
         JPanel animateTab=new JPanel(new FlowLayout(FlowLayout.LEFT,5,4));
         animateTab.add(button("+ Pose",()->add(false)));
         animateTab.add(button("Duplicate",()->add(true)));
+        animateTab.add(button("Split",this::splitAtPlayhead));
         animateTab.add(button("Delete",this::remove));
         animateTab.add(button("Copy",this::copyFrame));
         animateTab.add(button("Paste",this::pasteFrame));
@@ -896,6 +899,22 @@ public final class Editor extends JFrame {
         markDirty();
         refresh();
         timeline.revealFrame(frame);
+    }
+    /** Divide the current held pose without shifting any subsequent frames. */
+    private void splitAtPlayhead() {
+        stopPlayback();
+        try {
+            selected=model.splitAt(frame);
+            clearRange();
+            stage.clearSelection();
+            stage.invalidateDrawing();
+            markDirty();
+            refresh();
+            timeline.revealFrame(frame);
+            status.setText("Split at frame "+(frame+1)+" — both halves remain independently editable");
+        } catch(IllegalArgumentException|IllegalStateException ex) {
+            status.setText("Cannot split: "+ex.getMessage());
+        }
     }
     private void remove() {
         if (model.timeline.size()==1) return;
