@@ -92,3 +92,20 @@ File, Draw, Animate, and Media tabs replace the crowded scrolling toolbar, while
 Automatic timeline following reveals the current frame during playback, frame stepping, and seek. Dragging an exposure's edge toward the left or right edge of the screen scrolls continuously while held; audio-lane swipes remain available for manual scrolling.
 
 Physical keyboard: Ctrl+1–4 chooses a tab; Ctrl+S/O/N saves/opens/creates a project; Ctrl+C/V copies/pastes; Ctrl+D duplicates; Ctrl+Z/Y undo/redo; Space plays; and Left/Right steps a frame. File → More → Keyboard keymaps chooses the Standard or Animation preset (J add pose, K duplicate, L play, brackets frame-step). The choice persists.
+
+
+## Canvas zoom and updates (Android 12+)
+
+Pinch with two fingers to zoom (50–800%); move two fingers to pan without
+drawing. In **Draw → More** or the floating **Tools** menu, choose Zoom +,
+Zoom -, Fit canvas or toggle one-finger Pan mode. Canvas zoom affects only
+the viewport, not the quality or coordinates of saved project drawings.
+Ctrl+plus, Ctrl+minus and Ctrl+0 work with supported hardware keyboards.
+
+**File → More → Check for updates** queries published GitHub releases,
+including prereleases. Updates are checked no more than once per day by
+default, and can be disabled in **File → More → Update preferences**.
+Installing an update is always user-directed; no silent installations.
+Preview APKs are debug-signed and CI signing keys can rotate between runs:
+back up projects before changing installations, and never uninstall without
+backing up app-private data. Requires Android 12 (API 31) or later.
