@@ -20,8 +20,26 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - id: androidsdk
-        uses: android-actions/setup-android@v3
+      - name: Use Android SDK preinstalled on Ubuntu runner
+        id: androidsdk
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if test ! -d "$SDK_ROOT"; then
+            echo "::error::Android SDK directory missing: $SDK_ROOT"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          if test -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"; then
+            echo "sdkmanager=$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" >> "$GITHUB_OUTPUT"
+          elif command -v sdkmanager >/dev/null 2>&1; then
+            echo "sdkmanager=$(command -v sdkmanager)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::sdkmanager was not found in the runner's Android SDK"
+            exit 1
+          fi
       - id: gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -31,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager --install 'platforms;android-35' 'build-tools;35.0.0' 2>&1 | tee android-sdk-install.log
+          "${{ steps.androidsdk.outputs.sdkmanager }}" --sdk_root="$ANDROID_HOME" --install 'platforms;android-35' 'build-tools;35.0.0' 2>&1 | tee android-sdk-install.log
           test -f "$ANDROID_HOME/platforms/android-35/android.jar"
           test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
           java -version
