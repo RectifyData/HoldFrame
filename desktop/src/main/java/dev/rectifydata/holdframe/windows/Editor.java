@@ -634,6 +634,34 @@ public final class Editor extends JFrame {
         item(view,"Fit canvas (Ctrl+0)",()->stage.zoomReset());
         JMenu settings = new JMenu("Settings");
         item(settings,"Keyboard keymaps…",this::showKeymapDialog);
+        item(settings,"Create application shortcuts…",()->{
+            JCheckBox desktopShortcut=new JCheckBox("Desktop shortcut",true);
+            JCheckBox appShortcut=new JCheckBox("Start Menu / Applications shortcut",true);
+            JPanel options=new JPanel(new GridLayout(2,1));
+            options.add(desktopShortcut);options.add(appShortcut);
+            int result=JOptionPane.showConfirmDialog(this,options,"Create HoldFrame shortcuts",
+                JOptionPane.OK_CANCEL_OPTION,JOptionPane.PLAIN_MESSAGE);
+            if(result!=JOptionPane.OK_OPTION)return;
+            if(!desktopShortcut.isSelected()&&!appShortcut.isSelected())return;
+            status.setText("Creating HoldFrame shortcuts...");
+            new SwingWorker<Void,Void>() {
+                Exception error;
+                @Override protected Void doInBackground(){
+                    try{ShortcutSupport.create(desktopShortcut.isSelected(),appShortcut.isSelected());}
+                    catch(Exception e){error=e;}
+                    return null;
+                }
+                @Override protected void done(){
+                    if(error!=null)JOptionPane.showMessageDialog(Editor.this,
+                        "Cannot create shortcuts: "+error.getMessage(),"Shortcut error",JOptionPane.ERROR_MESSAGE);
+                    else JOptionPane.showMessageDialog(Editor.this,
+                        "HoldFrame shortcuts created. Portable JAR users now have a stable per-user app copy.",
+                        "Shortcuts created",JOptionPane.INFORMATION_MESSAGE);
+                    refresh();
+                }
+            }.execute();
+        });
+
         JCheckBoxMenuItem autoUpdates=new JCheckBoxMenuItem("Check for updates automatically",
             Preferences.userNodeForPackage(Editor.class).getBoolean("auto_updates",true));
         autoUpdates.addActionListener(e->Preferences.userNodeForPackage(Editor.class)
