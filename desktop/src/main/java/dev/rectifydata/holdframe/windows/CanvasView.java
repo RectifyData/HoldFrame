@@ -74,7 +74,7 @@ final class CanvasView extends JComponent {
         setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
         MouseAdapter mouse = new MouseAdapter() {
             @Override public void mouseMoved(MouseEvent event) {
-                if (tool != Tool.LASSO) return;
+                if (tool != Tool.LASSO && tool != Tool.TEXT) return;
                 Model.Point pt=toPoint(event);
                 Rectangle2D.Float b=selectionBounds();
                 Corner corner=b==null ? null : cornerAt(pt,b);
@@ -83,7 +83,7 @@ final class CanvasView extends JComponent {
                 else if (corner==Corner.NE) cursor=Cursor.NE_RESIZE_CURSOR;
                 else if (corner==Corner.SW) cursor=Cursor.SW_RESIZE_CURSOR;
                 else if (corner==Corner.SE) cursor=Cursor.SE_RESIZE_CURSOR;
-                else if ((b!=null && nearBounds(pt,b)) || hitText(pt)>=0 || hitImage(pt)>=0) cursor=Cursor.MOVE_CURSOR;
+                else if ((b!=null && nearBounds(pt,b)) || hitText(pt)>=0 || (tool==Tool.LASSO && hitImage(pt)>=0)) cursor=Cursor.MOVE_CURSOR;
                 setCursor(Cursor.getPredefinedCursor(cursor));
             }
             @Override public void mousePressed(MouseEvent event) {
@@ -97,8 +97,26 @@ final class CanvasView extends JComponent {
                 Model.Point pt = toPoint(event);
                 if (tool == Tool.TEXT) {
                     int textIndex=hitText(pt);
-                    if (textIndex >= 0) editor.editTextAt(textIndex);
-                    else editor.addTextAt(pt);
+                    if (textIndex>=0 && event.getClickCount()>=2) {
+                        editor.editTextAt(textIndex);
+                        return;
+                    }
+                    Rectangle2D.Float bounds=selectionBounds();
+                    Corner corner=bounds==null?null:cornerAt(pt,bounds);
+                    if(corner!=null) {
+                        activeCorner=corner;
+                        beginTransform(pt,Drag.SCALE);
+                    } else if(bounds!=null && nearBounds(pt,bounds)) {
+                        beginTransform(pt,Drag.MOVE);
+                    } else if(textIndex>=0) {
+                        clearSelection();
+                        selectedTexts.add(editor.project().drawingAt(editor.selected()).texts.get(textIndex));
+                        beginTransform(pt,Drag.MOVE);
+                    } else {
+                        clearSelection();
+                        editor.addTextAt(pt);
+                    }
+                    repaint();
                     return;
                 }
                 if (tool != Tool.LASSO) {
@@ -222,6 +240,12 @@ final class CanvasView extends JComponent {
         selectedImages.addAll(editor.project().drawingAt(editor.selected()).images);
         repaint();
     }
+    void selectOnlyText(Model.TextItem text) {
+        setTool(Tool.TEXT);
+        clearSelection();
+        if (text!=null) selectedTexts.add(text);
+        repaint();
+    }
     void selectOnlyImage(Model.ImageItem image) {
         setTool(Tool.LASSO);
         clearSelection();
@@ -236,7 +260,7 @@ final class CanvasView extends JComponent {
     void setNextOnion(boolean visible) { nextOnion=visible; repaint(); }
     boolean isOnion() { return onion; }
     void clearSelection() {
-        selection.clear(); selectedTexts.clear(); selectedImages.clear(); selectedImages.clear(); lasso.clear();
+        selection.clear(); selectedTexts.clear(); selectedImages.clear(); lasso.clear();
         originalPositions=null; originalWidths=null; originalTexts=null; originalImages=null;
         drag=Drag.NONE; activeCorner=null; repaint();
     }
@@ -483,7 +507,7 @@ final class CanvasView extends JComponent {
             g.draw(path);
         }
         Rectangle2D.Float b=selectionBounds();
-        if (b!=null && tool==Tool.LASSO) {
+        if (b!=null && (tool==Tool.LASSO || (tool==Tool.TEXT && !selectedTexts.isEmpty()))) {
             float pad=4/scale;
             g.setColor(new Color(0x116DA8));
             g.setStroke(new BasicStroke(1.5f/scale,BasicStroke.CAP_BUTT,BasicStroke.JOIN_BEVEL,
