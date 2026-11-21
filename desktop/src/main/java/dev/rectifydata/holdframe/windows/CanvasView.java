@@ -31,6 +31,25 @@ final class CanvasView extends JComponent {
     private String cachedDrawingId, previousGhostId, nextGhostId;
     private Model.Stroke preview;
     private float scale = 1f, left, top;
+    private float zoom=1f,panX,panY;
+    private boolean panning;
+    private int lastPanX,lastPanY;
+    float zoomLevel(){return zoom;}
+    void zoomReset(){zoom=1f;panX=panY=0f;repaint();}
+    void zoomBy(float factor){zoomBy(factor,getWidth()/2f,getHeight()/2f);}
+    void zoomBy(float factor,float focusX,float focusY) {
+        geometry();
+        float dx=(focusX-left)/Math.max(.01f,scale);
+        float dy=(focusY-top)/Math.max(.01f,scale);
+        float requested=zoom*factor;
+        if(!Float.isFinite(requested))return;
+        zoom=Math.max(.5f,Math.min(8f,requested));
+        geometry();
+        panX+=focusX-(left+dx*scale);
+        panY+=focusY-(top+dy*scale);
+        repaint();
+    }
+
     private Color ink = new Color(0x171717);
     private float brush = 6;
     private Tool tool = Tool.PEN;
@@ -68,6 +87,11 @@ final class CanvasView extends JComponent {
                 setCursor(Cursor.getPredefinedCursor(cursor));
             }
             @Override public void mousePressed(MouseEvent event) {
+                if(SwingUtilities.isMiddleMouseButton(event)) {
+                    panning=true;lastPanX=event.getX();lastPanY=event.getY();
+                    setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+                    return;
+                }
                 if (!SwingUtilities.isLeftMouseButton(event) || !onPaper(event.getX(),event.getY())) return;
                 editor.stopPlayback();
                 Model.Point pt = toPoint(event);
@@ -115,6 +139,10 @@ final class CanvasView extends JComponent {
                 repaint();
             }
             @Override public void mouseDragged(MouseEvent event) {
+                if(panning) {
+                    panX+=event.getX()-lastPanX;panY+=event.getY()-lastPanY;
+                    lastPanX=event.getX();lastPanY=event.getY();repaint();return;
+                }
                 Model.Point pt = toPoint(event);
                 if (drag == Drag.DRAW && preview != null) {
                     Model.Point prev = preview.points.get(preview.points.size()-1);
@@ -129,6 +157,9 @@ final class CanvasView extends JComponent {
                 repaint();
             }
             @Override public void mouseReleased(MouseEvent event) {
+                if(panning) {
+                    panning=false;setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));return;
+                }
                 if (drag == Drag.DRAW && preview != null) {
                     // The project changes only on mouse release; the preview is not saved on cancel.
                     editor.project().drawingAt(editor.selected()).strokes.add(preview);
@@ -168,6 +199,12 @@ final class CanvasView extends JComponent {
         };
         addMouseListener(mouse);
         addMouseMotionListener(mouse);
+        addMouseWheelListener(event -> {
+            if(event.isControlDown()) {
+                zoomBy((float)Math.pow(1.18,-event.getPreciseWheelRotation()),event.getX(),event.getY());
+                event.consume();
+            }
+        });
     }
 
     void setTool(Tool next) {
@@ -348,9 +385,9 @@ final class CanvasView extends JComponent {
     }
     private void geometry() {
         float w=Math.max(1,getWidth()-32),h=Math.max(1,getHeight()-32);
-        scale=Math.min(w/Model.WIDTH,h/Model.HEIGHT);
-        left=(getWidth()-Model.WIDTH*scale)/2;
-        top=(getHeight()-Model.HEIGHT*scale)/2;
+        scale=Math.min(w/Model.WIDTH,h/Model.HEIGHT)*zoom;
+        left=(getWidth()-Model.WIDTH*scale)/2+panX;
+        top=(getHeight()-Model.HEIGHT*scale)/2+panY;
     }
     private boolean onPaper(int x,int y) {
         geometry();
