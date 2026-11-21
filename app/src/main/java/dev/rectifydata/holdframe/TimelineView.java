@@ -7,6 +7,7 @@ import android.graphics.Paint;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.HorizontalScrollView;
 import dev.rectifydata.holdframe.core.Model;
 
 /** Exposure rectangles with draggable right edges, not one cell per rendered frame. */
@@ -17,6 +18,66 @@ public final class TimelineView extends View {
     private final float density;
     private int resizing = -1;
     private boolean seeking;
+    private float pointerViewportX;
+    private boolean trackingPointer;
+    private static final int SCROLL_TICK_MS=24;
+    private final Runnable edgeScrollTick=new Runnable() {
+        @Override public void run() {
+            if(!trackingPointer || (resizing<0 && !seeking))return;
+            HorizontalScrollView parent=scroller();
+            if(parent==null || parent.getWidth()<=0)return;
+            int margin=dp(48);
+            float speed=0;
+            if(pointerViewportX<margin)
+                speed=-Math.max(3,(margin-pointerViewportX)*.42f);
+            else if(pointerViewportX>parent.getWidth()-margin)
+                speed=Math.max(3,(pointerViewportX-(parent.getWidth()-margin))*.42f);
+            if(speed==0)return;
+            int old=parent.getScrollX();
+            parent.scrollTo(Math.max(0,old+Math.round(speed)),0);
+            if(parent.getScrollX()!=old) {
+                applyDragX(parent.getScrollX()+pointerViewportX);
+                invalidate();
+            }
+            if(trackingPointer)postDelayed(this,SCROLL_TICK_MS);
+        }
+    };
+    private HorizontalScrollView scroller() {
+        return getParent() instanceof HorizontalScrollView
+            ? (HorizontalScrollView)getParent() : null;
+    }
+    private void stopAutoScroll() {
+        trackingPointer=false;
+        removeCallbacks(edgeScrollTick);
+    }
+    private void startAutoScroll() {
+        removeCallbacks(edgeScrollTick);
+        postDelayed(edgeScrollTick,SCROLL_TICK_MS);
+    }
+    /** Scroll to reveal the active playhead, including during playback and keyboard stepping. */
+    void followFrame(final int selectedFrame) {
+        if(trackingPointer)return;
+        post(()->{
+            if(trackingPointer)return;
+            HorizontalScrollView parent=scroller();
+            if(parent==null || parent.getWidth()<=0)return;
+            int x=Math.round(dp(12)+selectedFrame*unit);
+            int left=parent.getScrollX();
+            int margin=Math.min(dp(68),Math.max(dp(8),parent.getWidth()/5));
+            if(x<left+margin)parent.scrollTo(Math.max(0,x-margin),0);
+            else if(x>left+parent.getWidth()-margin)
+                parent.scrollTo(Math.max(0,x-parent.getWidth()+margin),0);
+        });
+    }
+    private void applyDragX(float x) {
+        if(resizing>=0) {
+            int length=frame(x)-start(resizing);
+            editor.extendClip(resizing,Math.max(1,length));
+        } else if(seeking) {
+            editor.seek(frame(x));
+        }
+    }
+
     TimelineView(Context context, MainActivity editor) {
         super(context);
         this.editor = editor;
@@ -30,11 +91,16 @@ public final class TimelineView extends View {
         unit = Math.min(dp(5), 20000f / Math.max(1,editor.project().totalFrames()));
     }
     void refresh() {
-        updateUnit();
-        int width = Math.max(dp(400), Math.min(20_080,(int)(dp(18)+editor.project().totalFrames()*unit+dp(70))));
-        ViewGroup.LayoutParams old = getLayoutParams();
-        if (old != null && old.width != width) {
-            old.width = width;
+        // Stable pixels per frame throughout a resize drag.
+        if(!trackingPointer)updateUnit();
+        HorizontalScrollView parent=scroller();
+        int extra=resizing>=0 && parent!=null
+            ? Math.max(parent.getWidth(),dp(280)) : 0;
+        int width=Math.max(dp(400),Math.min(1_800_000,
+            (int)(dp(18)+editor.project().totalFrames()*unit+dp(70))+extra));
+        ViewGroup.LayoutParams old=getLayoutParams();
+        if(old!=null && old.width!=width) {
+            old.width=width;
             setLayoutParams(old);
         }
         invalidate();
@@ -96,43 +162,55 @@ public final class TimelineView extends View {
     }
     @Override public boolean onTouchEvent(MotionEvent event) {
         int type=event.getActionMasked();
-        if (type==MotionEvent.ACTION_DOWN) {
-            resizing=-1;
-            seeking=false;
-            if (event.getY()>=dp(25) && event.getY()<dp(97)) {
-                float nearest=dp(13);
+        if(type==MotionEvent.ACTION_DOWN) {
+            stopAutoScroll();
+            resizing=-1;seeking=false;
+            HorizontalScrollView parent=scroller();
+            if(event.getY()>=dp(22) && event.getY()<dp(99)) {
+                float nearest=dp(15);
                 long cursor=0;
-                for (int i=0;i<editor.project().timeline.size();i++) {
+                for(int i=0;i<editor.project().timeline.size();i++) {
                     cursor+=editor.project().timeline.get(i).duration;
                     float edge=dp(12)+cursor*unit;
                     float delta=Math.abs(event.getX()-edge);
-                    if (delta<nearest) { nearest=delta; resizing=i; }
+                    if(delta<nearest) {nearest=delta;resizing=i;}
                 }
             }
-            if (resizing<0) {
-                seeking=true;
-                editor.seek(frame(event.getX()));
-            } else {
+            if(resizing<0 && event.getY()<dp(102))seeking=true;
+            if(resizing>=0||seeking) {
                 editor.stopPlayback();
+                trackingPointer=true;
+                pointerViewportX=event.getX()-(parent==null?0:parent.getScrollX());
+                getParent().requestDisallowInterceptTouchEvent(true);
+                if(seeking)applyDragX(event.getX());
+                refresh();
+                startAutoScroll();
+                return true;
             }
-            getParent().requestDisallowInterceptTouchEvent(resizing>=0);
+            // Audio-row swipes remain scrollable with Android's native scroller.
+            getParent().requestDisallowInterceptTouchEvent(false);
+            return false;
+        }
+        if(type==MotionEvent.ACTION_MOVE) {
+            if(trackingPointer) {
+                HorizontalScrollView parent=scroller();
+                pointerViewportX=event.getX()-(parent==null?0:parent.getScrollX());
+                applyDragX(event.getX());
+                startAutoScroll();
+            }
             return true;
         }
-        if (type==MotionEvent.ACTION_MOVE) {
-            if (resizing>=0) {
-                int length=frame(event.getX())-start(resizing);
-                editor.extendClip(resizing,Math.max(1,length));
-            } else if (seeking) {
-                // Let the HorizontalScrollView intercept large horizontal drags to pan.
-                editor.seek(frame(event.getX()));
-            }
-            return true;
-        }
-        if (type==MotionEvent.ACTION_UP || type==MotionEvent.ACTION_CANCEL) {
-            resizing=-1;
-            seeking=false;
+        if(type==MotionEvent.ACTION_UP || type==MotionEvent.ACTION_CANCEL) {
+            if(trackingPointer && type==MotionEvent.ACTION_UP)applyDragX(event.getX());
+            stopAutoScroll();
+            resizing=-1;seeking=false;
+            refresh();
             return true;
         }
         return true;
+    }
+    @Override protected void onDetachedFromWindow() {
+        stopAutoScroll();
+        super.onDetachedFromWindow();
     }
 }
