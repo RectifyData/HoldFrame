@@ -109,3 +109,14 @@ Installing an update is always user-directed; no silent installations.
 Preview APKs are debug-signed and CI signing keys can rotate between runs:
 back up projects before changing installations, and never uninstall without
 backing up app-private data. Requires Android 12 (API 31) or later.
+
+
+## Transforming editable text (Android 12+)
+
+Choose **Draw → More → Move / resize text** or the floating **Tools** menu.
+Tap a text element to select it, drag to move it, then drag any of its four
+blue corner handles to resize width and height. Select **Finish text transform**
+to go back to drawing, or **Edit selected text** to change the text/font.
+New text opens with handles ready. Undo/redo includes text transforms, while
+low RAM mode updates just the selected text during dragging. Two-finger pinch
+zoom and pan remain available, and text remains editable across HFM4 saves.
