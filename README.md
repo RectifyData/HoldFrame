@@ -181,3 +181,13 @@ prereleases. Daily checks are on by default, and can be disabled under
 **Settings → Check for updates automatically**. Updates are user-directed;
 the app opens the official release page and never installs silently.
 The downloadable JAR requires Java 17 or later and runs on Windows/Linux.
+
+
+## Transforming editable text (desktop)
+
+Choose the **Text** tool, then click any existing text. Drag to reposition it,
+or drag any of the four highlighted corner handles to resize its width and
+height independently. Double-click to edit the words/font/color. Newly added
+text is automatically selected. Transforms support Ctrl+Z/Ctrl+Y and are saved
+as editable font/text objects in the project (not flattened to image pixels).
+The existing Lasso tool can still transform text alongside images and strokes.
