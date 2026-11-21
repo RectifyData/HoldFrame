@@ -851,7 +851,7 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_S: saveDocument();return true;
                 case KeyEvent.KEYCODE_Z: undo();return true;
                 case KeyEvent.KEYCODE_T: toggleTextTransformMode();return true;
-                case KeyEvent.KEYCODE_BACKSPACE: deleteSelectedText();return true;
+                case KeyEvent.KEYCODE_DEL: deleteSelectedText();return true;
                 case KeyEvent.KEYCODE_EQUALS:
                 case KeyEvent.KEYCODE_PLUS: canvas.changeZoom(1.25f);return true;
                 case KeyEvent.KEYCODE_MINUS: canvas.changeZoom(.8f);return true;
