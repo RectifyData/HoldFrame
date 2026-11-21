@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  issues: write
 concurrency:
   group: holdframe-unified-${{ github.ref }}
   cancel-in-progress: false
@@ -71,16 +72,10 @@ jobs:
         run: |
           ./build.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows compilation failed' }
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Generate original app icon
+      - name: Check committed Windows icon
         shell: pwsh
         run: |
-          python -m pip install pillow
-          if ($LASTEXITCODE -ne 0) { throw 'Pillow installation failed' }
-          python tools/generate_icon.py
-          if ($LASTEXITCODE -ne 0) { throw 'Icon generation failed' }
+          if (-not (Test-Path assets/HoldFrame.ico)) { throw 'Missing application icon' }
       - name: Create bundled-runtime Windows application
         shell: pwsh
         run: |
@@ -156,8 +151,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m pip install --user pillow
-          python3 tools/generate_icon.py
+          test -s assets/HoldFrame.png
           mkdir -p release
           jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --icon assets/HoldFrame.png --dest packaged --app-version "0.8.${{ github.run_number }}" --vendor RectifyData
           tar -czf release/HoldFrame-Linux-bundled-Java.tar.gz -C packaged HoldFrame
@@ -236,3 +230,20 @@ jobs:
             --title "HoldFrame $tag (Android, Windows, Linux)" \
             --notes "One release, one ZIP attachment with the Android 12+ APK, Windows visible installer and portable app, Linux app with bundled Java, cross-platform JAR, README and checksums. Android timeline now continuously follows playback. Prerelease; physical-device verification pending." \
             --prerelease
+
+  report-build-failure:
+    needs: [android, windows, linux, unified-release]
+    if: ${{ always() && (needs.android.result == 'failure' || needs.windows.result == 'failure' || needs.linux.result == 'failure' || needs.unified-release.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report exact failed platform to GitHub issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANDROID_STATUS: ${{ needs.android.result }}
+          WINDOWS_STATUS: ${{ needs.windows.result }}
+          LINUX_STATUS: ${{ needs.linux.result }}
+          RELEASE_STATUS: ${{ needs.unified-release.result }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "HoldFrame unified build failed ($GITHUB_RUN_NUMBER)" \
+            --body "Windows=$WINDOWS_STATUS; Linux=$LINUX_STATUS; Android=$ANDROID_STATUS; UnifiedRelease=$RELEASE_STATUS. Logs: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
