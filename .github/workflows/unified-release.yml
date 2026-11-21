@@ -43,12 +43,14 @@ jobs:
           mkdir -p build/release-tests
           javac --release 17 -d build/release-tests core/src/main/java/dev/rectifydata/holdframe/core/*.java core/src/test/java/dev/rectifydata/holdframe/core/*.java
           java -cp build/release-tests dev.rectifydata.holdframe.core.ReleaseCheckerTest
+          java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformMathTest
+          java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformProjectTest
       - name: Build and sign Android APK
         shell: bash
         run: |
           set -euo pipefail
           gradle --no-daemon --console=plain :app:assembleDebug \
-            -PreleaseVersion="0.9.$GITHUB_RUN_NUMBER" \
+            -PreleaseVersion="0.10.$GITHUB_RUN_NUMBER" \
             -PbuildNumber="$((9000 + GITHUB_RUN_NUMBER))"
           test -s app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
@@ -136,20 +138,24 @@ jobs:
           java -cp build/classes dev.rectifydata.holdframe.core.MediaCoreTest
           java -cp build/classes dev.rectifydata.holdframe.core.SequenceClipboardTest
           java -cp build/classes dev.rectifydata.holdframe.core.ReleaseCheckerTest
+          java -cp build/classes dev.rectifydata.holdframe.core.TextTransformMathTest
+          java -cp build/classes dev.rectifydata.holdframe.core.TextTransformProjectTest
           java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.CanvasZoomTest
           java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.ExportSupportTest
           if ! command -v xvfb-run >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y xvfb; fi
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineAutoScrollTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineDragAndLayoutTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.FeatureTabsAndKeymapTest
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.DirectTextTransformTest
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TextAndFourHandleTest
       - name: Stage Java executable
         run: |
           mkdir -p release
           cp dist/HoldFrame.jar release/HoldFrame-Desktop.jar
           mkdir -p build/version-meta/META-INF
-          printf '0.9.%s\n' "$GITHUB_RUN_NUMBER" > build/version-meta/META-INF/holdframe-version.txt
+          printf '0.10.%s\n' "$GITHUB_RUN_NUMBER" > build/version-meta/META-INF/holdframe-version.txt
           jar --update --file release/HoldFrame-Desktop.jar -C build/version-meta META-INF/holdframe-version.txt
-          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -q "^0.9.$GITHUB_RUN_NUMBER$"
+          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -q "^0.10.$GITHUB_RUN_NUMBER$"
       - uses: actions/upload-artifact@v4
         with:
           name: holdframe-build-java
@@ -210,8 +216,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          tag="v0.9.${{ github.run_number }}"
-          notes="HoldFrame canvas zoom (Android pinch/pan; desktop Ctrl+wheel/middle-drag) and in-app GitHub update checking. Exactly two release files: Android 12+ debug-signed APK and executable Java 17+ JAR for Windows/Linux. No silent installer. APK has passed CI signing, ZIP integrity, manifest, alignment and Android 12 emulator installation/launch checks. Physical-device testing remains pending; debug key may rotate, so back up projects before upgrading."
+          tag="v0.10.${{ github.run_number }}"
+          notes="HoldFrame editable text transform: tap-to-select and drag-to-move on Android and Java desktop; resize through all four handles with opposite corners anchored, reversible undo/redo and HFM4 project saving. Retains zoom and GitHub updater. Exactly two attachments: Android 12+ APK and executable Java 17+ JAR for Windows/Linux. Experimental prerelease; Android emulator installation and launch are CI-gated. Back up before replacing debug-signed APKs; physical testing pending."
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --target "$GITHUB_SHA" \
               --title "HoldFrame $tag (Android APK + Java JAR)" \
