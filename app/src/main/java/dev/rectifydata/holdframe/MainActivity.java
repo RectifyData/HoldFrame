@@ -447,6 +447,7 @@ public final class MainActivity extends Activity {
                 break;
             case 2:
                 actionButton("+ Pose",()->add(false));
+                actionButton("Split",this::splitAtPlayhead);
                 actionButton("Copy",this::copyPose);
                 actionButton("Paste",this::pastePose);
                 actionButton("More ▾",()->showFeatureMenu(2));
@@ -482,6 +483,7 @@ public final class MainActivity extends Activity {
                 break;
             case 2:
                 menu.getMenu().add("Duplicate pose").setOnMenuItemClickListener(i->{add(true);return true;});
+                menu.getMenu().add("Split at playhead").setOnMenuItemClickListener(i->{splitAtPlayhead();return true;});
                 menu.getMenu().add("Copy range…").setOnMenuItemClickListener(i->{copyRangeDialog();return true;});
                 menu.getMenu().add("Delete pose").setOnMenuItemClickListener(i->{delete();return true;});
                 menu.getMenu().add("Undo").setOnMenuItemClickListener(i->{undo();return true;});
@@ -517,7 +519,7 @@ public final class MainActivity extends Activity {
     private void showKeymapReference() {
         String common="Ctrl+S Save · Ctrl+O Open · Ctrl+N New project\n"
             +"Ctrl+C Copy · Ctrl+V Paste · Ctrl+D Duplicate\n"
-            +"Ctrl+Z Undo · Ctrl+Y Redo · Ctrl+T Transform Text · Ctrl+1–4 Tabs\n"
+            +"Ctrl+Z Undo · Ctrl+Y Redo · Ctrl+T Transform Text · Ctrl+B Split · Ctrl+1–4 Tabs\n"
             +"←/→ Step frame · Space Play/Pause";
         String extra="\n\nAnimation preset: J Add pose · K Duplicate · L Play/Pause · [ / ] Step frame";
         new AlertDialog.Builder(this).setTitle("Keyboard shortcuts")
@@ -806,6 +808,7 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_C: copyPose();return true;
                 case KeyEvent.KEYCODE_V: pastePose();return true;
                 case KeyEvent.KEYCODE_D: add(true);return true;
+                case KeyEvent.KEYCODE_B: splitAtPlayhead();return true;
                 case KeyEvent.KEYCODE_N: newProject();return true;
                 case KeyEvent.KEYCODE_O: openDocument();return true;
                 case KeyEvent.KEYCODE_S: saveDocument();return true;
@@ -837,6 +840,19 @@ public final class MainActivity extends Activity {
             }
         }
         return super.dispatchKeyEvent(event);
+    }
+    /** Divide an exposure at the exact current frame, retaining its audio timing. */
+    private void splitAtPlayhead() {
+        stopPlayback();
+        try {
+            selected=model.splitAt(currentFrame);
+            selectedFrom=selectedTo=-1;
+            changed();
+            timeline.followFrame(currentFrame);
+            toast("Split — edit each half separately");
+        } catch(IllegalArgumentException|IllegalStateException ex) {
+            toast("Cannot split: "+ex.getMessage());
+        }
     }
     private void delete() {
         if (model.timeline.size()==1) {toast("Keep at least one drawing");return;}
