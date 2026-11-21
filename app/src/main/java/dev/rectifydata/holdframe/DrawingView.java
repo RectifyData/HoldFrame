@@ -47,6 +47,38 @@ public final class DrawingView extends View {
     private boolean eraser;
     private Listener listener;
     private float lastX, lastY;
+    // Zoom only transforms the stage, not the saved vector drawing or raster cache.
+    private float zoom=1f, panX, panY;
+    private boolean panMode, panning, pinching, suppressStrokeUntilUp;
+    private float touchX, touchY, pinchSpan, pinchFocusX, pinchFocusY;
+
+    float zoomLevel(){return zoom;}
+    boolean isPanMode(){return panMode;}
+    void setPanMode(boolean enabled){panMode=enabled;}
+    void resetZoom(){zoom=1f;panX=panY=0f;invalidate();}
+    void changeZoom(float factor){rect();zoomAt(zoom*factor,getWidth()/2f,getHeight()/2f);}
+    private void zoomAt(float requested,float focusX,float focusY){
+        rect();
+        float currentLeft=bounds.left,currentTop=bounds.top;
+        float dx=(focusX-currentLeft)/Math.max(1f,bounds.width());
+        float dy=(focusY-currentTop)/Math.max(1f,bounds.height());
+        float target=Math.max(.5f,Math.min(8f,requested));
+        if(!Float.isFinite(target))return;
+        zoom=target;
+        float fit=Math.min(Math.max(1,getWidth()-24f)/Model.WIDTH,
+                           Math.max(1,getHeight()-24f)/Model.HEIGHT);
+        float w=Model.WIDTH*fit*zoom,h=Model.HEIGHT*fit*zoom;
+        panX=focusX-dx*w-(getWidth()-w)/2f;
+        panY=focusY-dy*h-(getHeight()-h)/2f;
+        invalidate();
+    }
+    private static float touchSpacing(MotionEvent e){
+        if(e.getPointerCount()<2)return 0f;
+        return (float)Math.hypot(e.getX(0)-e.getX(1),e.getY(0)-e.getY(1));
+    }
+    private static float focusX(MotionEvent e){return (e.getX(0)+e.getX(1))/2f;}
+    private static float focusY(MotionEvent e){return (e.getY(0)+e.getY(1))/2f;}
+
 
     DrawingView(Context context) {
         super(context);
@@ -225,9 +257,9 @@ public final class DrawingView extends View {
     private void rect() {
         float scale = Math.min(Math.max(1, getWidth()-24f) / Model.WIDTH,
                                Math.max(1, getHeight()-24f) / Model.HEIGHT);
-        float w = Model.WIDTH * scale, h = Model.HEIGHT * scale;
-        bounds.set((getWidth()-w)/2, (getHeight()-h)/2,
-                   (getWidth()+w)/2, (getHeight()+h)/2);
+        float w = Model.WIDTH * scale * zoom, h = Model.HEIGHT * scale * zoom;
+        bounds.set((getWidth()-w)/2+panX, (getHeight()-h)/2+panY,
+                   (getWidth()+w)/2+panX, (getHeight()+h)/2+panY);
     }
     private void drawOnion(Canvas surface,Model.Drawing neighbor,int tint) {
         if (neighbor==null) return;
@@ -290,6 +322,45 @@ public final class DrawingView extends View {
         if (drawing == null) return false;
         rect();
         int type=event.getActionMasked();
+        if(type==MotionEvent.ACTION_POINTER_DOWN && event.getPointerCount()>=2){
+            // Stop an uncommitted brush stroke before beginning a pinch.
+            if(stroke!=null){stroke=null;rebuild();}
+            pinching=true;panning=false;suppressStrokeUntilUp=true;
+            pinchSpan=touchSpacing(event);
+            pinchFocusX=focusX(event);pinchFocusY=focusY(event);
+            getParent().requestDisallowInterceptTouchEvent(true);
+            return true;
+        }
+        if(pinching){
+            if(type==MotionEvent.ACTION_MOVE && event.getPointerCount()>=2){
+                float x=focusX(event),y=focusY(event),span=touchSpacing(event);
+                panX+=x-pinchFocusX;panY+=y-pinchFocusY;
+                if(pinchSpan>1f&&span>1f)zoomAt(zoom*span/pinchSpan,x,y);
+                pinchSpan=span;pinchFocusX=x;pinchFocusY=y;
+                invalidate();
+            }
+            if(type==MotionEvent.ACTION_POINTER_UP || type==MotionEvent.ACTION_CANCEL || type==MotionEvent.ACTION_UP)pinching=false;
+            return true;
+        }
+        if(suppressStrokeUntilUp){
+            if(type==MotionEvent.ACTION_UP || type==MotionEvent.ACTION_CANCEL){
+                suppressStrokeUntilUp=false;
+                getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return true;
+        }
+        if(panMode){
+            if(type==MotionEvent.ACTION_DOWN){
+                panning=true;touchX=event.getX();touchY=event.getY();return true;
+            }
+            if(type==MotionEvent.ACTION_MOVE && panning){
+                panX+=event.getX()-touchX;panY+=event.getY()-touchY;
+                touchX=event.getX();touchY=event.getY();invalidate();return true;
+            }
+            if(type==MotionEvent.ACTION_UP || type==MotionEvent.ACTION_CANCEL){
+                panning=false;return true;
+            }
+        }
         if (type == MotionEvent.ACTION_DOWN) {
             if (!bounds.contains(event.getX(),event.getY())) return false;
             if (listener != null) listener.startStroke();
