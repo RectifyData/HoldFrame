@@ -81,6 +81,11 @@ public final class MainActivity extends Activity {
     private TimelineView timeline;
     private TextView status;
     private Button playButton;
+    private LinearLayout tabActions;
+    private RadioGroup featureTabs;
+    private int activeFeatureTab=1;
+    private static final String KEYMAP_PREF="hardware_keymap";
+    private int keymapProfile; // Standard or Animation preset.
     private int selected, currentFrame;
     private boolean playing;
     private long playbackOriginNanos;
@@ -204,6 +209,7 @@ public final class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.rgb(35,41,49));
         getWindow().setNavigationBarColor(Color.rgb(35,41,49));
         initMemoryProfile();
+        keymapProfile=getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE).getInt(KEYMAP_PREF,0);
         loadAutosave();
         buildUI();
         refresh();
@@ -224,29 +230,29 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(242,245,248));
         setContentView(root);
-        HorizontalScrollView topScroll=new HorizontalScrollView(this);
-        topScroll.setHorizontalScrollBarEnabled(false);
-        LinearLayout toolbar=new LinearLayout(this);
-        toolbar.setPadding(dp(4),dp(2),dp(4),dp(2));
-        toolbar.addView(button("New",this::newProject));
-        toolbar.addView(button("Open",this::openDocument));
-        toolbar.addView(button("Save",this::saveDocument));
-        toolbar.addView(button("Save as",this::createDocument));
-        toolbar.addView(button("⚙ Settings",this::openSettings));
-        toolbar.addView(button("+ Pose",()->add(false)));
-        toolbar.addView(button("Duplicate",()->add(true)));
-        toolbar.addView(button("Copy",this::copyPose));
-        toolbar.addView(button("Copy range",this::copyRangeDialog));
-        toolbar.addView(button("Paste",this::pastePose));
-        toolbar.addView(button("+ Text",()->editText(-1)));
-        toolbar.addView(button("+ Image",this::importImage));
-        toolbar.addView(button("+ Audio",this::importAudio));
-        toolbar.addView(button("Remove audio",this::removeAudio));
-        toolbar.addView(button("Delete",this::delete));
-        toolbar.addView(button("Undo",this::undo));
-        toolbar.addView(button("Redo",this::redo));
-        topScroll.addView(toolbar);
-        root.addView(topScroll,new LinearLayout.LayoutParams(-1,dp(52)));
+        // Feature tabs keep actions visible without horizontally overflowing toolbars.
+        featureTabs=new RadioGroup(this);
+        featureTabs.setOrientation(RadioGroup.HORIZONTAL);
+        featureTabs.setPadding(dp(2),dp(1),dp(2),0);
+        String[] names={"File","Draw","Animate","Media"};
+        for(int i=0;i<names.length;i++) {
+            RadioButton tab=new RadioButton(this);
+            tab.setButtonDrawable((android.graphics.drawable.Drawable)null);
+            tab.setText(names[i]);tab.setTextSize(12);
+            tab.setGravity(Gravity.CENTER);
+            tab.setPadding(dp(2),0,dp(2),0);
+            tab.setId(View.generateViewId());
+            final int index=i;
+            tab.setOnClickListener(v->selectFeatureTab(index));
+            featureTabs.addView(tab,new RadioGroup.LayoutParams(0,dp(39),1));
+            if(i==activeFeatureTab) featureTabs.check(tab.getId());
+        }
+        root.addView(featureTabs,new LinearLayout.LayoutParams(-1,dp(40)));
+        tabActions=new LinearLayout(this);
+        tabActions.setGravity(Gravity.CENTER_VERTICAL);
+        tabActions.setPadding(dp(3),dp(1),dp(3),dp(2));
+        root.addView(tabActions,new LinearLayout.LayoutParams(-1,dp(44)));
+        selectFeatureTab(activeFeatureTab);
         FrameLayout workArea=new FrameLayout(this);
         canvas=new DrawingView(this);
         canvas.setLowRamMode(lowRamEnabled);
@@ -292,6 +298,98 @@ public final class MainActivity extends Activity {
         timeline=new TimelineView(this,this);
         timelineScroll.addView(timeline,new HorizontalScrollView.LayoutParams(dp(400),dp(146)));
         root.addView(timelineScroll,new LinearLayout.LayoutParams(-1,dp(155)));
+    }
+    private void actionButton(String text,Runnable action) {
+        Button b=button(text,action);
+        b.setTextSize(11);b.setPadding(dp(2),0,dp(2),0);
+        tabActions.addView(b,new LinearLayout.LayoutParams(0,dp(43),1));
+    }
+    private void selectFeatureTab(int tab) {
+        activeFeatureTab=Math.max(0,Math.min(3,tab));
+        if(tabActions==null)return;
+        if(featureTabs!=null && featureTabs.getCheckedRadioButtonId()!=
+           featureTabs.getChildAt(activeFeatureTab).getId())
+            featureTabs.check(featureTabs.getChildAt(activeFeatureTab).getId());
+        tabActions.removeAllViews();
+        switch(activeFeatureTab) {
+            case 0:
+                actionButton("New",this::newProject);
+                actionButton("Open",this::openDocument);
+                actionButton("Save",this::saveDocument);
+                actionButton("More ▾",()->showFeatureMenu(0));
+                break;
+            case 1:
+                actionButton(canvas!=null && canvas.isEraser()?"Pen":"Eraser",()->{
+                    canvas.setEraser(!canvas.isEraser());selectFeatureTab(1);
+                });
+                actionButton("Color",this::pickColor);
+                actionButton("Size",this::pickSize);
+                actionButton("More ▾",()->showFeatureMenu(1));
+                break;
+            case 2:
+                actionButton("+ Pose",()->add(false));
+                actionButton("Copy",this::copyPose);
+                actionButton("Paste",this::pastePose);
+                actionButton("More ▾",()->showFeatureMenu(2));
+                break;
+            default:
+                actionButton("+ Text",()->editText(-1));
+                actionButton("+ Image",this::importImage);
+                actionButton("+ Audio",this::importAudio);
+                actionButton("More ▾",()->showFeatureMenu(3));
+        }
+    }
+    private void showFeatureMenu(int feature) {
+        View anchor=tabActions.getChildAt(tabActions.getChildCount()-1);
+        PopupMenu menu=new PopupMenu(this,anchor);
+        switch(feature) {
+            case 0:
+                menu.getMenu().add("Save as…").setOnMenuItemClickListener(i->{createDocument();return true;});
+                menu.getMenu().add("Memory settings").setOnMenuItemClickListener(i->{openSettings();return true;});
+                menu.getMenu().add("Keyboard keymaps").setOnMenuItemClickListener(i->{showKeymapSettings();return true;});
+                break;
+            case 1:
+                menu.getMenu().add("Import font").setOnMenuItemClickListener(i->{importFont();return true;});
+                menu.getMenu().add("Toggle onion skins").setOnMenuItemClickListener(i->{canvas.setOnionEnabled(!canvas.isOnionEnabled());return true;});
+                menu.getMenu().add("Edit existing text").setOnMenuItemClickListener(i->{chooseText();return true;});
+                break;
+            case 2:
+                menu.getMenu().add("Duplicate pose").setOnMenuItemClickListener(i->{add(true);return true;});
+                menu.getMenu().add("Copy range…").setOnMenuItemClickListener(i->{copyRangeDialog();return true;});
+                menu.getMenu().add("Delete pose").setOnMenuItemClickListener(i->{delete();return true;});
+                menu.getMenu().add("Undo").setOnMenuItemClickListener(i->{undo();return true;});
+                menu.getMenu().add("Redo").setOnMenuItemClickListener(i->{redo();return true;});
+                break;
+            default:
+                menu.getMenu().add("Edit text").setOnMenuItemClickListener(i->{chooseText();return true;});
+                menu.getMenu().add("Move/resize image").setOnMenuItemClickListener(i->{editImagePlacement();return true;});
+                menu.getMenu().add("Remove audio").setOnMenuItemClickListener(i->{removeAudio();return true;});
+                menu.getMenu().add("Import font").setOnMenuItemClickListener(i->{importFont();return true;});
+        }
+        menu.show();
+    }
+    private void showKeymapSettings() {
+        final String[] names={"Standard: Ctrl+ shortcuts","Animation: J/K/L and [ / ]"};
+        new AlertDialog.Builder(this).setTitle("Hardware keyboard keymaps")
+            .setSingleChoiceItems(names,keymapProfile,(dialog,choice)->{
+                keymapProfile=choice;
+                getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE).edit()
+                    .putInt(KEYMAP_PREF,choice).apply();
+                dialog.dismiss();
+                showKeymapReference();
+            })
+            .setNeutralButton("Show shortcuts",(dialog,which)->showKeymapReference())
+            .setNegativeButton("Cancel",null).show();
+    }
+    private void showKeymapReference() {
+        String common="Ctrl+S Save · Ctrl+O Open · Ctrl+N New project\n"
+            +"Ctrl+C Copy · Ctrl+V Paste · Ctrl+D Duplicate\n"
+            +"Ctrl+Z Undo · Ctrl+Y Redo · Ctrl+1–4 Tabs\n"
+            +"←/→ Step frame · Space Play/Pause";
+        String extra="\n\nAnimation preset: J Add pose · K Duplicate · L Play/Pause · [ / ] Step frame";
+        new AlertDialog.Builder(this).setTitle("Keyboard shortcuts")
+            .setMessage(common+(keymapProfile==1?extra:""))
+            .setPositiveButton("OK",null).show();
     }
     private void openTools(View anchor) {
         PopupMenu menu=new PopupMenu(this,anchor);
@@ -479,6 +577,7 @@ public final class MainActivity extends Activity {
         currentFrame=next;
         selectedFrom=selectedTo=-1;
         refresh();
+        timeline.followFrame(currentFrame);
     }
     void extendClip(int clipIndex,int frames) {
         int original=model.timeline.get(clipIndex).duration;
@@ -548,14 +647,47 @@ public final class MainActivity extends Activity {
             toast("Cannot paste: "+e.getMessage());
         }
     }
-    @Override public boolean onKeyShortcut(int keyCode,KeyEvent event) {
-        if (event.isCtrlPressed() && keyCode==KeyEvent.KEYCODE_C) {
-            copyPose(); return true;
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if(event.getAction()!=KeyEvent.ACTION_DOWN || event.getRepeatCount()>0)
+            return super.dispatchKeyEvent(event);
+        if(getCurrentFocus() instanceof EditText)
+            return super.dispatchKeyEvent(event);
+        int code=event.getKeyCode();
+        if(event.isCtrlPressed()) {
+            switch(code) {
+                case KeyEvent.KEYCODE_1: selectFeatureTab(0);return true;
+                case KeyEvent.KEYCODE_2: selectFeatureTab(1);return true;
+                case KeyEvent.KEYCODE_3: selectFeatureTab(2);return true;
+                case KeyEvent.KEYCODE_4: selectFeatureTab(3);return true;
+                case KeyEvent.KEYCODE_C: copyPose();return true;
+                case KeyEvent.KEYCODE_V: pastePose();return true;
+                case KeyEvent.KEYCODE_D: add(true);return true;
+                case KeyEvent.KEYCODE_N: newProject();return true;
+                case KeyEvent.KEYCODE_O: openDocument();return true;
+                case KeyEvent.KEYCODE_S: saveDocument();return true;
+                case KeyEvent.KEYCODE_Z: undo();return true;
+                case KeyEvent.KEYCODE_Y: redo();return true;
+                default: break;
+            }
+        } else if(!event.isAltPressed() && !event.isShiftPressed()) {
+            switch(code) {
+                case KeyEvent.KEYCODE_DPAD_LEFT: seek(currentFrame-1);return true;
+                case KeyEvent.KEYCODE_DPAD_RIGHT: seek(currentFrame+1);return true;
+                case KeyEvent.KEYCODE_SPACE: togglePlayback();return true;
+                default: break;
+            }
+            if(keymapProfile==1) {
+                switch(code) {
+                    case KeyEvent.KEYCODE_J: add(false);return true;
+                    case KeyEvent.KEYCODE_K: add(true);return true;
+                    case KeyEvent.KEYCODE_L: togglePlayback();return true;
+                    case KeyEvent.KEYCODE_LEFT_BRACKET: seek(currentFrame-1);return true;
+                    case KeyEvent.KEYCODE_RIGHT_BRACKET: seek(currentFrame+1);return true;
+                    default: break;
+                }
+            }
         }
-        if (event.isCtrlPressed() && keyCode==KeyEvent.KEYCODE_V) {
-            pastePose(); return true;
-        }
-        return super.onKeyShortcut(keyCode,event);
+        return super.dispatchKeyEvent(event);
     }
     private void delete() {
         if (model.timeline.size()==1) {toast("Keep at least one drawing");return;}
