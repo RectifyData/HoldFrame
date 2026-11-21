@@ -120,3 +120,17 @@ to go back to drawing, or **Edit selected text** to change the text/font.
 New text opens with handles ready. Undo/redo includes text transforms, while
 low RAM mode updates just the selected text during dragging. Two-finger pinch
 zoom and pan remain available, and text remains editable across HFM4 saves.
+
+
+### v0.11 splitting and text deletion
+
+Open **Animate → More → Split at playhead** (hardware keyboard Ctrl+B) to
+divide a held pose into two exposures at the current frame. Animation duration,
+image assets and audio track timing remain unchanged; editing either half
+detaches its shared drawing automatically. Splitting is unavailable exactly at
+pose boundaries.
+
+In **Media → More**, choose **Edit selected text** or **Delete selected text**.
+Tap text in **Draw → More → Move / resize text** mode to select it, move it
+or scale it with four corner handles. Text deletion participates in undo/redo.
+The low-RAM action bar remains compact: Split stays in Animate's More menu.
