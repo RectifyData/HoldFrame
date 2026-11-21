@@ -114,13 +114,17 @@ public final class MainActivity extends Activity {
     }
     private void applyTextEdit(Model.Drawing editable,TextEdit change,boolean undo){
         Model.TextItem value=undo?change.before:change.after;
-        if(value==null){
-            if(change.index>=0&&change.index<editable.texts.size())
-                editable.texts.remove(change.index);
-        } else if(change.index>=0&&change.index<editable.texts.size()){
-            editable.texts.get(change.index).assign(value);
-        } else if(change.index==editable.texts.size()){
-            editable.texts.add(value.copy());
+        int index=change.index;
+        if(change.before==null || change.after==null) {
+            // Insert/delete at the exact index: restoring a deleted object must
+            // not overwrite the text object that followed it in the list.
+            if(value==null) {
+                if(index>=0 && index<editable.texts.size()) editable.texts.remove(index);
+            } else if(index>=0 && index<=editable.texts.size()) {
+                editable.texts.add(index,value.copy());
+            }
+        } else if(index>=0 && index<editable.texts.size()) {
+            editable.texts.get(index).assign(value);
         }
         canvas.setDrawing(editable);
         canvas.rebuild();
@@ -496,6 +500,7 @@ public final class MainActivity extends Activity {
                     int index=canvas.selectedTextIndex();
                     if(index>=0)editText(index);else chooseText();return true;
                 });
+                menu.getMenu().add("Delete selected text").setOnMenuItemClickListener(i->{deleteSelectedText();return true;});
                 menu.getMenu().add("Edit text").setOnMenuItemClickListener(i->{chooseText();return true;});
                 menu.getMenu().add("Move/resize image").setOnMenuItemClickListener(i->{editImagePlacement();return true;});
                 menu.getMenu().add("Remove audio").setOnMenuItemClickListener(i->{removeAudio();return true;});
@@ -557,6 +562,39 @@ public final class MainActivity extends Activity {
             .setOnMenuItemClickListener(item->{canvas.setOnionEnabled(!canvas.isOnionEnabled());return true;});
         menu.getMenu().add("New pose").setOnMenuItemClickListener(item->{add(false);return true;});
         menu.show();
+    }
+    private void deleteSelectedText() {
+        Model.Drawing current=model.drawingAt(selected);
+        int index=canvas.selectedTextIndex();
+        if(index<0 || index>=current.texts.size()) {
+            if(current.texts.isEmpty())toast("No text in this pose");
+            else chooseDeleteText();
+            return;
+        }
+        deleteTextAt(index);
+    }
+    private void chooseDeleteText() {
+        Model.Drawing drawing=model.drawingAt(selected);
+        if(drawing.texts.isEmpty()){toast("No text to delete");return;}
+        String[] labels=new String[drawing.texts.size()];
+        for(int i=0;i<labels.length;i++) {
+            String label=drawing.texts.get(i).value.replace('\n',' ');
+            labels[i]=label.length()>45?label.substring(0,45)+"…":label;
+        }
+        new AlertDialog.Builder(this).setTitle("Delete text")
+            .setItems(labels,(dialog,index)->deleteTextAt(index))
+            .setNegativeButton("Cancel",null).show();
+    }
+    private void deleteTextAt(int index) {
+        stopPlayback();
+        Model.Drawing drawing=model.ensureEditable(selected);
+        if(index<0||index>=drawing.texts.size())return;
+        Model.TextItem before=drawing.texts.remove(index);
+        recordTextEdit(drawing,index,before,null);
+        canvas.setDrawing(drawing);
+        canvas.rebuild();
+        changed();
+        toast("Selected text deleted (Undo to restore)");
     }
     private void chooseText() {
         Model.Drawing d=model.drawingAt(selected);
@@ -814,6 +852,7 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_S: saveDocument();return true;
                 case KeyEvent.KEYCODE_Z: undo();return true;
                 case KeyEvent.KEYCODE_T: toggleTextTransformMode();return true;
+                case KeyEvent.KEYCODE_BACKSPACE: deleteSelectedText();return true;
                 case KeyEvent.KEYCODE_EQUALS:
                 case KeyEvent.KEYCODE_PLUS: canvas.changeZoom(1.25f);return true;
                 case KeyEvent.KEYCODE_MINUS: canvas.changeZoom(.8f);return true;
