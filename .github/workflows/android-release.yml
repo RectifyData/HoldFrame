@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  issues: write
 concurrency:
   group: android-build-${{ github.ref }}
   cancel-in-progress: false
@@ -61,6 +62,38 @@ jobs:
         run: |
           set -euo pipefail
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk
+      - name: Record actual failure diagnostics
+        if: failure()
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'Android 12/Low-RAM compile failed. This is not a passing APK build.'
+            echo
+            echo "Build: $RUN_URL (attempt $RUN_ATTEMPT)"
+            echo "Commit: $GITHUB_SHA"
+            echo
+            echo 'Relevant Gradle error lines:'
+            echo '```text'
+            if test -f android-build.log; then
+              grep -E -i '(^FAILURE:|^\* What went wrong:|^> Task |error:|could not |failed|not found|exception|unresolved reference)' android-build.log | tail -n 70 | head -c 12000 || true
+            else
+              echo 'No Gradle output found: failure occurred before the APK compile step. See the run URL.'
+            fi
+            echo '```'
+          } > android-failure-summary.md
+          issue_number=$(gh issue list -R "$REPOSITORY" --state open --search '"HoldFrame Android build failure" in:title' --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if test -n "$issue_number"; then
+            gh issue comment "$issue_number" -R "$REPOSITORY" --body-file android-failure-summary.md
+          else
+            gh issue create -R "$REPOSITORY" --title 'HoldFrame Android build failure (diagnostics)' --body-file android-failure-summary.md
+          fi
       - name: Upload build logs if anything failed
         if: failure()
         uses: actions/upload-artifact@v4
