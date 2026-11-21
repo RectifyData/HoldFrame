@@ -175,18 +175,24 @@ public final class MainActivity extends Activity {
 
     @Override public void onLowMemory() {
         super.onLowMemory();
-        clearTransientMemory();
+        clearTransientMemory(true);
     }
 
     @Override public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        if (level>=TRIM_MEMORY_RUNNING_LOW) clearTransientMemory();
+        if (level>=TRIM_MEMORY_RUNNING_LOW) {
+            // UI_HIDDEN alone means the app is backgrounded, not necessarily out of RAM.
+            // Free native bitmap caches without needlessly erasing Undo history.
+            boolean pressure=level<TRIM_MEMORY_UI_HIDDEN || level>=TRIM_MEMORY_BACKGROUND;
+            clearTransientMemory(pressure);
+        }
     }
 
-    private void clearTransientMemory() {
-        // Project strokes stay intact; only scratch buffers and reversible cache state go.
-        redos.clear();
-        undos.clear();
+    private void clearTransientMemory(boolean dropHistory) {
+        if (dropHistory) {
+            redos.clear();
+            undos.clear();
+        }
         if (canvas!=null) canvas.releaseMemory();
     }
 

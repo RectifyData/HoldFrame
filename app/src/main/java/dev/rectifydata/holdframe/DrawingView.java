@@ -327,7 +327,9 @@ public final class DrawingView extends View {
     private void append(float x, float y) {
         if (Math.abs(x-lastX)<0.1 && Math.abs(y-lastY)<0.1) return;
         stroke.points.add(new Model.Point(x,y));
-        raster.drawLine(lastX,lastY,x,y,brushPaint);
+        // The OS may reclaim the render cache during an in-progress gesture.
+        if (raster==null) rebuild();
+        if (raster!=null) raster.drawLine(lastX,lastY,x,y,brushPaint);
         lastX=x; lastY=y;
     }
 }
