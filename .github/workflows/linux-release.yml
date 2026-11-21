@@ -15,7 +15,7 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Build Java desktop app
-        run: ./build.sh
+        run: bash build.sh
       - name: Test core
         run: |
           javac --release 17 -cp build/classes -d build/classes core/src/test/java/dev/rectifydata/holdframe/core/*.java
@@ -32,6 +32,7 @@ jobs:
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TextAndFourHandleTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineAutoScrollTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineDragAndLayoutTest
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.FeatureTabsAndKeymapTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.SequenceClipboardGuiTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.MediaFeatureTest
           xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.ExportMenuGuiTest
@@ -58,6 +59,6 @@ jobs:
         run: |
           gh release create "linux-v0.5.${{ github.run_number }}" release/* \
             --target "$GITHUB_SHA" \
-            --title "HoldFrame Linux export preview ${{ github.run_number }}" \
+            --title "HoldFrame Linux tabbed editor preview ${{ github.run_number }}" \
             --notes "Linux app with bundled Java and cross-platform JAR. Added MP4+audio, animated GIF, PNG sequence ZIP, sprite sheet, still export, background progress, cancellation and CLI. Preview build." \
             --prerelease
