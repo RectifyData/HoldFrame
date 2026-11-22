@@ -81,14 +81,36 @@ jobs:
           & gh release view $tag --repo $env:GH_REPO
           if ($LASTEXITCODE -ne 0) { throw "Android release $tag does not exist" }
           $existing = @(& gh release view $tag --repo $env:GH_REPO --json assets --jq '.assets[].name')
-          if ($existing -contains "HoldFrame-Windows-Setup.exe") {
-            Write-Host "Windows installer already exists; refusing to overwrite it"
-            exit 0
+          if ($existing -notcontains "HoldFrame-Windows-Setup.exe") {
+            & gh release upload $tag release/HoldFrame-Windows-Setup.exe --repo $env:GH_REPO
+            if ($LASTEXITCODE -ne 0) { throw "GitHub Windows installer publication failed" }
           }
-          & gh release upload $tag release/HoldFrame-Windows-Setup.exe --repo $env:GH_REPO
-          if ($LASTEXITCODE -ne 0) { throw "GitHub Windows installer publication failed" }
           $all = @(& gh release view $tag --repo $env:GH_REPO --json assets --jq '.assets[].name')
           if ($all -notcontains "HoldFrame-Windows-Setup.exe" -or $all -notcontains "HoldFrame-Android12-LowRAM.apk") {
             throw "Release must contain both Android APK and Windows EXE"
           }
-          Write-Host "Windows installer published to https://github.com/$env:GH_REPO/releases/tag/$tag"
+          & gh release download $tag --repo $env:GH_REPO --pattern "HoldFrame-Android12-LowRAM.apk" --dir release
+          if ($LASTEXITCODE -ne 0) { throw "Could not download existing Android APK for checksum verification" }
+          $checksums = @()
+          foreach ($name in @("HoldFrame-Android12-LowRAM.apk", "HoldFrame-Windows-Setup.exe")) {
+            $digest = (Get-FileHash -Algorithm SHA256 "release/$name").Hash.ToLowerInvariant()
+            $checksums += "$digest  $name"
+          }
+          [System.IO.File]::WriteAllLines((Join-Path (Get-Location) "release/SHA256SUMS.txt"), $checksums)
+          if ($all -notcontains "SHA256SUMS.txt") {
+            & gh release upload $tag release/SHA256SUMS.txt --repo $env:GH_REPO
+            if ($LASTEXITCODE -ne 0) { throw "Checksum upload failed" }
+          }
+          $oldNotes = @(& gh release view $tag --repo $env:GH_REPO --json body --jq .body) -join [Environment]::NewLine
+          $header = "Windows interactive installer: HoldFrame-Windows-Setup.exe (Java runtime bundled)." +
+            [Environment]::NewLine + "Android APK: HoldFrame-Android12-LowRAM.apk (original retained)." +
+            [Environment]::NewLine + "Verification: SHA256SUMS.txt." +
+            [Environment]::NewLine + "Desktop and Android packages were built from separate source snapshots." +
+            [Environment]::NewLine + [Environment]::NewLine
+          if (-not $oldNotes.Contains("Windows interactive installer: HoldFrame-Windows-Setup.exe")) {
+            $notesPath = Join-Path $env:RUNNER_TEMP "holdframe-v0.12.31-notes.md"
+            [System.IO.File]::WriteAllText($notesPath,$header+$oldNotes)
+            & gh release edit $tag --repo $env:GH_REPO --title "[Legacy preview] HoldFrame v0.12.31 — Android and Windows" --notes-file $notesPath --prerelease
+            if ($LASTEXITCODE -ne 0) { throw "Unable to update release details" }
+          }
+          Write-Host "Verified downloads at https://github.com/$env:GH_REPO/releases/tag/$tag"
