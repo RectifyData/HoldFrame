@@ -43,12 +43,16 @@ final class NativeInstallerUpdater {
         }
         String page(){return "https://github.com/RectifyData/HoldFrame/releases/tag/"+tag;}
     }
-    static String platform(){return System.getProperty("os.name","").toLowerCase(java.util.Locale.ROOT).contains("win")?"windows":"linux";}
-    static String assetFor(String platform){return platform.equals("windows")?"HoldFrame-Setup.exe":"HoldFrame-Linux-amd64.deb";}
+    static String platform(){
+        String os=System.getProperty("os.name","").toLowerCase(java.util.Locale.ROOT);
+        return os.contains("win")?"windows":os.contains("linux")?"linux":"unsupported";
+    }
+    static String assetFor(String platform){return platform.equals("windows")?"HoldFrame-Setup.exe":platform.equals("linux")?"HoldFrame-Linux-amd64.deb":"";}
     /** Constrained parser: only accepts official GitHub URLs and the expected native asset. */
     static Update parse(String response,String installed,String platform) {
         if(response==null||response.length()>2_000_000)throw new IllegalArgumentException("Invalid release list");
         String expected=assetFor(platform);
+        if(expected.isEmpty())return null;
         Matcher tags=TAG.matcher(response);
         Update best=null;
         while(tags.find()) {

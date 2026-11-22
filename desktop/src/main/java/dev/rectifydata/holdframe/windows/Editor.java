@@ -498,6 +498,7 @@ public final class Editor extends JFrame {
         }.execute();
     }
     void selectAudio(String id) {
+        stage.clearSelection();
         selectedAudioId=id;
         timelineClipSelected=false;
         updatingAudioControls=true;
@@ -942,10 +943,8 @@ public final class Editor extends JFrame {
         selectedAudioId=null;timelineClipSelected=true;
         rangeStart=Math.min(rangeAnchor,index);
         rangeEnd=Math.max(rangeAnchor,index);
-        if (selected!=index) {
-            selected=index;
-            stage.clearSelection(); stage.invalidateDrawing();
-        }
+        if (selected!=index) selected=index;
+        stage.clearSelection(); stage.invalidateDrawing();
         frame=model.clipStart(index);
         refresh();
     }
