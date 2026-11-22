@@ -134,3 +134,8 @@ In **Media → More**, choose **Edit selected text** or **Delete selected text**
 Tap text in **Draw → More → Move / resize text** mode to select it, move it
 or scale it with four corner handles. Text deletion participates in undo/redo.
 The low-RAM action bar remains compact: Split stays in Animate's More menu.
+
+**Split audio:** Use **Media → More → Split audio at playhead**, select the
+audio clip, and put the playhead within the clip. No audio samples are copied;
+the new second clip resumes at the matching source offset and keeps
+volume/mute settings.
