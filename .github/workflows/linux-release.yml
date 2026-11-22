@@ -83,24 +83,3 @@ jobs:
           name: HoldFrame-Linux-Installer
           path: release/HoldFrame-Linux-amd64.deb
           if-no-files-found: error
-      - name: Publish native Linux Debian GitHub prerelease
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          tag="linux-v0.12.$GITHUB_RUN_NUMBER"
-          notes="HoldFrame native Linux .deb: self-contained Java runtime, desktop launcher, icon and package-manager installation. Adds Delete selected audio/pose clips, black expressive brush cursor and HFM5 pressure-aware strokes. No standalone JAR required."
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" release/HoldFrame-Linux-amd64.deb --clobber
-          else
-            gh release create "$tag" release/HoldFrame-Linux-amd64.deb --title "HoldFrame $tag Linux DEB" --target "$GITHUB_SHA" --notes "$notes" --prerelease
-          fi
-      - name: Report failed Linux installer build
-        if: failure()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue create -R "$GITHUB_REPOSITORY" --title "HoldFrame native Linux installer build failed" \
-            --body "Workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID; commit $GITHUB_SHA" || true
