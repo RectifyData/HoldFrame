@@ -71,3 +71,7 @@ shortcuts, and optional launch on completion. No silent installation.
 - Android: press **Esc** on a hardware keyboard to deselect text and timeline ranges. **File → More → Keep My Brush Size (KMBS)** controls whether the selected brush width is restored on restart.
 
 Updates never use silent installation; projects should be backed up before replacing debug-signed builds.
+
+### Installer and compilation pipeline
+
+A push to `main` runs Android SDK 35 compilation and Android 12 emulator checks alongside the Java 17 desktop build. Once both pass, the two verified build outputs are published as one GitHub prerelease. Windows-specific CI also creates a visible NSIS installer and publishes that setup alongside its executable JAR as a separate prerelease. The Android updater asks before downloading and hands off installation to the system Package Installer; Android may require explicit approval of HoldFrame as an install source. Debug-signing changes may prevent installation over earlier APKs.
