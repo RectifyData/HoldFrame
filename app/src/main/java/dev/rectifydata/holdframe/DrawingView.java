@@ -48,6 +48,7 @@ public final class DrawingView extends View {
     private Model.Drawing previousOnion, nextOnion;
     private boolean onionEnabled, onionPlaying;
     private Model.Stroke stroke;
+    private float pointerX=-1,pointerY=-1,pointerPressure=1f;
     private int color = Color.rgb(25, 25, 25);
     private float brushWidth = 6;
     private boolean eraser;
@@ -227,21 +228,7 @@ public final class DrawingView extends View {
                     raster.drawBitmap(bitmap,null,dest,stagePaint);
                 }
             }
-            for (Model.Stroke s : drawing.strokes) {
-                if (s.points.size() == 0) continue;
-                prepare(s);
-                Model.Point first = s.points.get(0);
-                raster.drawPoint(first.x, first.y, brushPaint);
-                if (s.points.size() > 1) {
-                    Path path = new Path();
-                    path.moveTo(first.x, first.y);
-                    for (int i=1; i<s.points.size(); i++) {
-                        Model.Point p = s.points.get(i);
-                        path.lineTo(p.x, p.y);
-                    }
-                    raster.drawPath(path, brushPaint);
-                }
-            }
+            for (Model.Stroke s : drawing.strokes) paintVariableStroke(raster,s);
             brushPaint.setXfermode(null);
             for(int i=0;i<drawing.texts.size();i++){
                 if(liveTextPreview&&i==selectedTextIndex)continue;
@@ -249,6 +236,28 @@ public final class DrawingView extends View {
             }
         }
         invalidate();
+    }
+    private static float normalizedPressure(MotionEvent event,int sample) {
+        // Android reports native pen pressure; finger and mouse use their configured size.
+        if(event.getToolType(0)!=MotionEvent.TOOL_TYPE_STYLUS &&
+           event.getToolType(0)!=MotionEvent.TOOL_TYPE_ERASER) return 1f;
+        float p=sample<0?event.getPressure(0):event.getHistoricalPressure(0,sample);
+        if(!Float.isFinite(p)) return 1f;
+        return Math.max(.1f,Math.min(2f,p));
+    }
+    private void paintVariableStroke(Canvas target,Model.Stroke s) {
+        if(s.points.isEmpty())return;
+        prepare(s);
+        boolean variable=s.pressures.size()==s.points.size();
+        Model.Point first=s.points.get(0);
+        brushPaint.setStrokeWidth(s.width*(variable?s.pressures.get(0):1f));
+        target.drawPoint(first.x,first.y,brushPaint);
+        for(int i=1;i<s.points.size();i++) {
+            Model.Point before=s.points.get(i-1),after=s.points.get(i);
+            brushPaint.setStrokeWidth(s.width*(variable?
+                (s.pressures.get(i-1)+s.pressures.get(i))*.5f:1f));
+            target.drawLine(before.x,before.y,after.x,after.y,brushPaint);
+        }
     }
     private void prepare(Model.Stroke s) {
         brushPaint.setStrokeWidth(s.width);
@@ -410,21 +419,7 @@ public final class DrawingView extends View {
         if (neighbor==null) return;
         // A temporary single layer respects eraser holes in the neighboring pose.
         int saved=surface.saveLayer(0,0,Model.WIDTH,Model.HEIGHT,null);
-        for (Model.Stroke s : neighbor.strokes) {
-            if (s.points.isEmpty()) continue;
-            prepare(s);
-            Model.Point first=s.points.get(0);
-            surface.drawPoint(first.x,first.y,brushPaint);
-            if (s.points.size()>1) {
-                Path path=new Path();
-                path.moveTo(first.x,first.y);
-                for (int i=1;i<s.points.size();i++) {
-                    Model.Point pt=s.points.get(i);
-                    path.lineTo(pt.x,pt.y);
-                }
-                surface.drawPath(path,brushPaint);
-            }
-        }
+        for (Model.Stroke s : neighbor.strokes) paintVariableStroke(surface,s);
         brushPaint.setXfermode(null);
         for (Model.TextItem text : neighbor.texts) renderText(surface,text);
         Paint shade=new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -465,6 +460,28 @@ public final class DrawingView extends View {
             canvas.restoreToCount(saved);
         }
         drawTextHandles(canvas);
+        if(pointerX>=0 && pointerY>=0 && !textTransformMode && !panMode && !pinching) {
+            // Black brush dot reflects the live stylus pressure. Contrasting rim
+            // prevents the dot disappearing against black brush marks.
+            float size=Math.max(2f,brushWidth*pointerPressure*bounds.width()/Model.WIDTH);
+            Paint rim=new Paint(Paint.ANTI_ALIAS_FLAG);
+            rim.setColor(Color.WHITE);
+            canvas.drawCircle(pointerX,pointerY,size*.5f+1.1f,rim);
+            rim.setColor(Color.BLACK);
+            canvas.drawCircle(pointerX,pointerY,size*.5f,rim);
+        }
+    }
+    @Override public boolean onHoverEvent(MotionEvent event) {
+        if(event.getActionMasked()==MotionEvent.ACTION_HOVER_EXIT) {
+            pointerX=pointerY=-1;invalidate();return true;
+        }
+        if(event.getActionMasked()==MotionEvent.ACTION_HOVER_MOVE ||
+           event.getActionMasked()==MotionEvent.ACTION_HOVER_ENTER) {
+            pointerX=event.getX();pointerY=event.getY();
+            pointerPressure=normalizedPressure(event,-1);
+            invalidate();return true;
+        }
+        return super.onHoverEvent(event);
     }
     private float sx(float x) {
         return Math.max(0,Math.min(Model.WIDTH,(x-bounds.left)*Model.WIDTH/Math.max(1,bounds.width())));
@@ -479,7 +496,7 @@ public final class DrawingView extends View {
         if(type==MotionEvent.ACTION_POINTER_DOWN && event.getPointerCount()>=2){
             if(textGesture!=0)finishTextGesture(true);
             // Stop an uncommitted brush stroke before beginning a pinch.
-            if(stroke!=null){stroke=null;rebuild();}
+            if(stroke!=null){stroke=null;pointerX=pointerY=-1;rebuild();}
             pinching=true;panning=false;suppressStrokeUntilUp=true;
             pinchSpan=touchSpacing(event);
             pinchFocusX=focusX(event);pinchFocusY=focusY(event);
@@ -523,8 +540,12 @@ public final class DrawingView extends View {
             if (raster==null) { rebuild(); if (raster==null) return false; }
             stroke = new Model.Stroke(color,brushWidth,eraser);
             lastX=sx(event.getX()); lastY=sy(event.getY());
+            pointerX=event.getX();pointerY=event.getY();
+            pointerPressure=normalizedPressure(event,-1);
             stroke.points.add(new Model.Point(lastX,lastY));
+            stroke.pressures.add(pointerPressure);
             prepare(stroke);
+            brushPaint.setStrokeWidth(brushWidth*pointerPressure);
             raster.drawPoint(lastX,lastY,brushPaint);
             brushPaint.setXfermode(null);
             getParent().requestDisallowInterceptTouchEvent(true);
@@ -534,28 +555,34 @@ public final class DrawingView extends View {
         if (type==MotionEvent.ACTION_MOVE || type==MotionEvent.ACTION_UP) {
             prepare(stroke);
             for (int i=0; i<event.getHistorySize(); i++)
-                append(sx(event.getHistoricalX(i)),sy(event.getHistoricalY(i)));
-            append(sx(event.getX()),sy(event.getY()));
+                append(sx(event.getHistoricalX(i)),sy(event.getHistoricalY(i)),
+                    normalizedPressure(event,i));
+            append(sx(event.getX()),sy(event.getY()),normalizedPressure(event,-1));
+            pointerX=event.getX();pointerY=event.getY();
+            pointerPressure=normalizedPressure(event,-1);
             brushPaint.setXfermode(null);
             invalidate();
         }
         if (type==MotionEvent.ACTION_UP) {
             drawing.strokes.add(stroke);
-            stroke=null;
+            stroke=null;pointerX=pointerY=-1;
             getParent().requestDisallowInterceptTouchEvent(false);
             if (listener != null) listener.endStroke();
         } else if (type==MotionEvent.ACTION_CANCEL) {
-            stroke=null;
+            stroke=null;pointerX=pointerY=-1;
             getParent().requestDisallowInterceptTouchEvent(false);
             rebuild();
         }
         return true;
     }
-    private void append(float x, float y) {
+    private void append(float x, float y,float pressure) {
         if (Math.abs(x-lastX)<0.1 && Math.abs(y-lastY)<0.1) return;
+        float before=stroke.pressures.get(stroke.pressures.size()-1);
         stroke.points.add(new Model.Point(x,y));
-        // The OS may reclaim the render cache during an in-progress gesture.
+        stroke.pressures.add(pressure);
+        // The OS may reclaim the cache during an in-progress gesture.
         if (raster==null) rebuild();
+        brushPaint.setStrokeWidth(brushWidth*(before+pressure)*.5f);
         if (raster!=null) raster.drawLine(lastX,lastY,x,y,brushPaint);
         lastX=x; lastY=y;
     }
