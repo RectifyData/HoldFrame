@@ -56,7 +56,11 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
-          & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version "0.5.${{ github.run_number }}" --vendor RectifyData --icon assets/HoldFrame.ico
+          New-Item -ItemType Directory -Force build/version-meta/META-INF | Out-Null
+          Set-Content -Path build/version-meta/META-INF/holdframe-version.txt -Value "0.11.${{ github.run_number }}" -Encoding ascii
+          & jar --update --file dist/HoldFrame.jar -C build/version-meta META-INF/holdframe-version.txt
+          if ($LASTEXITCODE -ne 0) { throw "Unable to stamp desktop version" }
+          & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version "0.11.${{ github.run_number }}" --vendor RectifyData --icon assets/HoldFrame.ico
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item dist/HoldFrame.jar release/HoldFrame.jar
       - name: Install NSIS build dependency
@@ -94,3 +98,21 @@ jobs:
         with:
           name: HoldFrame-Windows
           path: release/*
+      - name: Publish Windows installer and JAR GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $tag = "windows-v0.11.${{ github.run_number }}"
+          foreach ($file in @("release/HoldFrame-Setup.exe","release/HoldFrame.jar")) {
+            if (-not (Test-Path $file) -or (Get-Item $file).Length -lt 1024) { throw "Missing or invalid release asset: $file" }
+          }
+          $notes = "HoldFrame desktop preview. Windows installer has a visible setup wizard, optional shortcuts, and optional launch on Finish. Includes Escape to deselect and Keep My Brush Size (KMBS) across sessions. Cross-platform Java 17+ JAR also included."
+          & gh release view $tag --repo $env:GH_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            & gh release upload $tag release/HoldFrame-Setup.exe release/HoldFrame.jar --clobber --repo $env:GH_REPO
+          } else {
+            & gh release create $tag release/HoldFrame-Setup.exe release/HoldFrame.jar --target $env:GITHUB_SHA --title "HoldFrame $tag Windows setup" --notes $notes --prerelease --repo $env:GH_REPO
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Windows prerelease publication failed" }
