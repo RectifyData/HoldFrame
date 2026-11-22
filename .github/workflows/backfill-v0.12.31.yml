@@ -1,0 +1,94 @@
+name: Complete HoldFrame v0.12.31 Windows Release
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/backfill-v0.12.31.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: windows
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile desktop and regression tests
+        shell: pwsh
+        run: |
+          ./build.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Desktop compile failed" }
+          New-Item -ItemType Directory -Force build/tests | Out-Null
+          $tests = @(Get-ChildItem core/src/test/java/dev/rectifydata/holdframe/core -Filter *.java | ForEach-Object { $_.FullName })
+          $tests += @(Get-ChildItem desktop/src/test/java/dev/rectifydata/holdframe/windows -Filter *.java | ForEach-Object { $_.FullName })
+          & javac --release 17 -cp build/classes -d build/tests @tests
+          if ($LASTEXITCODE -ne 0) { throw "Test compile failed" }
+          foreach ($test in @("CoreTest","PressureStrokeTest","ReleaseCheckerTest")) {
+            & java -cp "build/classes;build/tests" ("dev.rectifydata.holdframe.core." + $test)
+            if ($LASTEXITCODE -ne 0) { throw "Core test failed: $test" }
+          }
+          foreach ($test in @("NativeInstallerUpdaterTest","ExportSupportTest","LassoTest")) {
+            & java -Djava.awt.headless=true -cp "build/classes;build/tests" ("dev.rectifydata.holdframe.windows." + $test)
+            if ($LASTEXITCODE -ne 0) { throw "Desktop test failed: $test" }
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate Windows icon
+        shell: pwsh
+        run: |
+          python -m pip install pillow
+          python tools/generate_icon.py
+      - name: Create visible native EXE installer with bundled Java
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release,build/version-meta/META-INF | Out-Null
+          Set-Content build/version-meta/META-INF/holdframe-version.txt "0.12.31" -Encoding ascii
+          & jar --update --file dist/HoldFrame.jar -C build/version-meta META-INF/holdframe-version.txt
+          if ($LASTEXITCODE -ne 0) { throw "Version stamp failed" }
+          & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version "0.12.31" --vendor RectifyData --icon assets/HoldFrame.ico
+          if ($LASTEXITCODE -ne 0) { throw "jpackage failed" }
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress }
+          if (-not (Test-Path $nsis)) { throw "NSIS unavailable" }
+          Push-Location installers
+          & $nsis windows.nsi
+          $status = $LASTEXITCODE
+          Pop-Location
+          if ($status -ne 0) { throw "NSIS packaging failed" }
+          Move-Item release/HoldFrame-Setup.exe release/HoldFrame-Windows-Setup.exe
+          if ((Get-Item release/HoldFrame-Windows-Setup.exe).Length -lt 1000000) { throw "Installer too small" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holdframe-v0.12.31-windows-setup
+          path: release/HoldFrame-Windows-Setup.exe
+          if-no-files-found: error
+      - name: Publish PC setup into existing Android v0.12.31 release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.HOLDFRAME_RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = "v0.12.31"
+          & gh release view $tag --repo $env:GH_REPO
+          if ($LASTEXITCODE -ne 0) { throw "Android release $tag does not exist" }
+          $existing = @(& gh release view $tag --repo $env:GH_REPO --json assets --jq '.assets[].name')
+          if ($existing -contains "HoldFrame-Windows-Setup.exe") {
+            Write-Host "Windows installer already exists; refusing to overwrite it"
+            exit 0
+          }
+          & gh release upload $tag release/HoldFrame-Windows-Setup.exe --repo $env:GH_REPO
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Windows installer publication failed" }
+          $all = @(& gh release view $tag --repo $env:GH_REPO --json assets --jq '.assets[].name')
+          if ($all -notcontains "HoldFrame-Windows-Setup.exe" -or $all -notcontains "HoldFrame-Android12-LowRAM.apk") {
+            throw "Release must contain both Android APK and Windows EXE"
+          }
+          Write-Host "Windows installer published to https://github.com/$env:GH_REPO/releases/tag/$tag"
