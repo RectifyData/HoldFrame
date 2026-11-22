@@ -106,6 +106,8 @@ public final class DrawingView extends View {
     void setListener(Listener l) { listener = l; }
     boolean isTextTransformMode(){return textTransformMode;}
     int selectedTextIndex(){return selectedTextIndex;}
+    float getBrushWidth(){return brushWidth;}
+    void deselectText(){finishTextGesture(false);selectedTextIndex=-1;invalidate();}
     void setTextTransformMode(boolean enabled){
         if(textTransformMode==enabled)return;
         finishTextGesture(false);

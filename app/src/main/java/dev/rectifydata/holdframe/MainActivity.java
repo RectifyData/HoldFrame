@@ -68,6 +68,8 @@ public final class MainActivity extends Activity {
     private static final String AUTO_UPDATES_PREF = "check_updates_automatically";
     private static final String UPDATE_CHECKED_AT = "last_update_check";
     private static final String LOW_RAM_PREFERENCE = "low_ram_preference";
+    private static final String KMBS_ENABLED = "keep_my_brush_size";
+    private static final String KMBS_SIZE = "saved_brush_size";
     private long physicalRamBytes;
     private int lowRamPreference = RamProfile.AUTO;
     private boolean lowRamEnabled;
@@ -345,6 +347,9 @@ public final class MainActivity extends Activity {
         selectFeatureTab(activeFeatureTab);
         FrameLayout workArea=new FrameLayout(this);
         canvas=new DrawingView(this);
+        SharedPreferences brushPrefs=getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE);
+        if(brushPrefs.getBoolean(KMBS_ENABLED,true))
+            canvas.setBrushWidth(Math.max(1,Math.min(60,brushPrefs.getInt(KMBS_SIZE,6))));
         canvas.setLowRamMode(lowRamEnabled);
         canvas.setListener(new DrawingView.Listener() {
             @Override public void startStroke() {
@@ -449,6 +454,7 @@ public final class MainActivity extends Activity {
             case 0:
                 menu.getMenu().add("Save as…").setOnMenuItemClickListener(i->{createDocument();return true;});
                 menu.getMenu().add("Memory settings").setOnMenuItemClickListener(i->{openSettings();return true;});
+                menu.getMenu().add("Keep My Brush Size (KMBS)").setOnMenuItemClickListener(i->{showKmbsSettings();return true;});
                 menu.getMenu().add("Keyboard keymaps").setOnMenuItemClickListener(i->{showKeymapSettings();return true;});
                 menu.getMenu().add("Check for updates").setOnMenuItemClickListener(i->{checkUpdates(true);return true;});
                 menu.getMenu().add("Update preferences").setOnMenuItemClickListener(i->{showUpdatePreferences();return true;});
@@ -505,7 +511,7 @@ public final class MainActivity extends Activity {
         String common="Ctrl+S Save · Ctrl+O Open · Ctrl+N New project\n"
             +"Ctrl+C Copy · Ctrl+V Paste · Ctrl+D Duplicate\n"
             +"Ctrl+Z Undo · Ctrl+Y Redo · Ctrl+T Transform Text · Ctrl+B Split · Ctrl+1–4 Tabs\n"
-            +"←/→ Step frame · Space Play/Pause";
+            +"←/→ Step frame · Space Play/Pause · Esc Deselect";
         String extra="\n\nAnimation preset: J Add pose · K Duplicate · L Play/Pause · [ / ] Step frame";
         new AlertDialog.Builder(this).setTitle("Keyboard shortcuts")
             .setMessage(common+(keymapProfile==1?extra:""))
@@ -715,12 +721,35 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("Brush color")
             .setItems(labels,(dialog,which)->canvas.setBrushColor(colors[which])).show();
     }
+    private void showKmbsSettings() {
+        SharedPreferences prefs=getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE);
+        CheckBox keep=new CheckBox(this);
+        keep.setText("Remember my brush size across sessions");
+        keep.setChecked(prefs.getBoolean(KMBS_ENABLED,true));
+        new AlertDialog.Builder(this).setTitle("Keep My Brush Size (KMBS)")
+            .setView(keep).setNegativeButton("Cancel",null)
+            .setPositiveButton("Save",(d,w)->{
+                SharedPreferences.Editor editor=prefs.edit().putBoolean(KMBS_ENABLED,keep.isChecked());
+                if(keep.isChecked())editor.putInt(KMBS_SIZE,Math.round(canvas.getBrushWidth()));
+                editor.apply();
+            }).show();
+    }
+    private void deselectAll() {
+        selectedFrom=selectedTo=-1;
+        if(canvas!=null)canvas.deselectText();
+        if(timeline!=null)timeline.invalidate();
+    }
     private void pickSize() {
         SeekBar slider=new SeekBar(this);
         slider.setMax(59);
-        slider.setProgress(5);
+        slider.setProgress(Math.max(0,Math.min(59,Math.round(canvas.getBrushWidth())-1)));
         new AlertDialog.Builder(this).setTitle("Brush size (1–60)")
-            .setView(slider).setPositiveButton("Apply",(dialog,which)->canvas.setBrushWidth(slider.getProgress()+1))
+            .setView(slider).setPositiveButton("Apply",(dialog,which)->{
+                int size=slider.getProgress()+1;
+                canvas.setBrushWidth(size);
+                SharedPreferences prefs=getSharedPreferences(SETTINGS_PREFS,MODE_PRIVATE);
+                if(prefs.getBoolean(KMBS_ENABLED,true))prefs.edit().putInt(KMBS_SIZE,size).apply();
+            })
             .setNegativeButton("Cancel",null).show();
     }
     private void refresh() {
@@ -817,6 +846,9 @@ public final class MainActivity extends Activity {
         if(getCurrentFocus() instanceof EditText)
             return super.dispatchKeyEvent(event);
         int code=event.getKeyCode();
+        if(code==KeyEvent.KEYCODE_ESCAPE && !event.isCtrlPressed() && !event.isAltPressed()) {
+            deselectAll();return true;
+        }
         if(event.isCtrlPressed()) {
             switch(code) {
                 case KeyEvent.KEYCODE_1: selectFeatureTab(0);return true;
