@@ -56,9 +56,11 @@ final class LassoMath {
     private static boolean same(Model.Point a,Model.Point b) {
         return Math.abs(a.x-b.x)<=0.0001f && Math.abs(a.y-b.y)<=0.0001f;
     }
-    private static void addUnique(Model.Stroke s,Model.Point p) {
-        if(s.points.isEmpty() || !same(s.points.get(s.points.size()-1),p))
+    private static void addUnique(Model.Stroke s,Model.Point p,float pressure,boolean weighted) {
+        if(s.points.isEmpty() || !same(s.points.get(s.points.size()-1),p)) {
             s.points.add(p);
+            if(weighted)s.pressures.add(pressure);
+        }
     }
     private static Path2D.Float polygonPath(List<Model.Point> polygon) {
         Path2D.Float path=new Path2D.Float(Path2D.WIND_EVEN_ODD);
@@ -93,6 +95,9 @@ final class LassoMath {
         Boolean currentInside=null;
         for(int i=1;i<source.points.size();i++) {
             Model.Point a=source.points.get(i-1),b=source.points.get(i);
+            boolean weighted=!source.pressures.isEmpty();
+            float pa=weighted?source.pressures.get(i-1):1f;
+            float pb=weighted?source.pressures.get(i):1f;
             if(same(a,b))continue;
             java.util.ArrayList<Double> cuts=new java.util.ArrayList<>();
             cuts.add(0d);
@@ -123,8 +128,9 @@ final class LassoMath {
                     active=fresh(source);
                     currentInside=inside;
                     active.points.add(start);
+                    if(weighted)active.pressures.add((float)(pa+(pb-pa)*previous));
                 }
-                addUnique(active,end);
+                addUnique(active,end,(float)(pa+(pb-pa)*next),weighted);
                 previous=next;
             }
         }

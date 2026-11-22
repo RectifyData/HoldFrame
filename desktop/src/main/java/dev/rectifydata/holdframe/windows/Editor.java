@@ -75,6 +75,7 @@ public final class Editor extends JFrame {
     private int selected = 0, frame = 0;
     private AudioSupport audio = new AudioSupport();
     private String selectedAudioId;
+    private boolean timelineClipSelected;
     private JCheckBox selectedAudioMute;
     private JSlider selectedAudioVolume;
     private boolean updatingAudioControls;
@@ -156,6 +157,15 @@ public final class Editor extends JFrame {
     private static <T> void removeIndexes(List<T> data,List<Integer> indexes) {
         indexes.sort(java.util.Comparator.reverseOrder());
         for(int at:indexes)if(at>=0&&at<data.size())data.remove(at);
+    }
+    /** Delete whichever clip/object was explicitly selected. Never delete an unselected pose. */
+    private void deleteSelection() {
+        if(!stage.selectedStrokeIndexes().isEmpty() || !stage.selectedTextIndexes().isEmpty() || !stage.selectedImageIndexes().isEmpty()) {
+            deleteSelectedObjects();return;
+        }
+        if(selectedAudioId!=null) {deleteAudio();return;}
+        if(timelineClipSelected) {remove();return;}
+        status.setText("Select a pose, audio clip or canvas object to delete");
     }
     private void deleteSelectedObjects() {
         stopPlayback();
@@ -489,6 +499,7 @@ public final class Editor extends JFrame {
     }
     void selectAudio(String id) {
         selectedAudioId=id;
+        timelineClipSelected=false;
         updatingAudioControls=true;
         try {
             for (Model.AudioClip clip:model.audioClips) if (clip.id.equals(id)) {
@@ -566,7 +577,7 @@ public final class Editor extends JFrame {
         shortcut("Redo","control Y",this::redo);
         shortcut("Select objects","control A",this::selectAll);
         shortcut("Deselect","ESCAPE",this::deselectAll);
-        shortcut("Delete selected objects","DELETE",this::deleteSelectedObjects);
+        shortcut("Delete selection","DELETE",this::deleteSelection);
         shortcut("Select timeline","control shift A",this::selectAllTimeline);
         shortcut("Copy poses","control C",this::copyFrame);
         shortcut("Paste poses","control V",this::pasteFrame);
@@ -592,6 +603,7 @@ public final class Editor extends JFrame {
         stage.clearSelection();
         rangeAnchor=rangeStart=rangeEnd=-1;
         selectedAudioId=null;
+        timelineClipSelected=false;
         stage.invalidateDrawing();
         refresh();
     }
@@ -731,7 +743,7 @@ public final class Editor extends JFrame {
         item(edit,"Select all objects (Ctrl+A)",this::selectAll);
         item(edit,"Add editable text…",()->addTextAt(new Model.Point(180,150)));
         item(edit,"Edit selected object…",this::editSelectedObject);
-        item(edit,"Delete selected objects (Del)",this::deleteSelectedObjects);
+        item(edit,"Delete selection (Del)",this::deleteSelection);
         item(edit,"Import image…",this::importImage);
         item(edit,"Delete selected audio clip",this::deleteAudio);
         item(edit,"Split selected audio at playhead",this::splitSelectedAudio);
@@ -957,6 +969,7 @@ public final class Editor extends JFrame {
         stopPlayback();
         if (!extend) rangeAnchor=index;
         else if (rangeAnchor<0) rangeAnchor=selected;
+        selectedAudioId=null;timelineClipSelected=true;
         rangeStart=Math.min(rangeAnchor,index);
         rangeEnd=Math.max(rangeAnchor,index);
         if (selected!=index) {
@@ -970,12 +983,14 @@ public final class Editor extends JFrame {
         selectTimelinePose(model.indexAt(Math.max(0,Math.min(model.totalFrames()-1,frame))),true);
     }
     private void clearRange() {
+        timelineClipSelected=false;
         rangeAnchor=selected;
         rangeStart=selected;
         rangeEnd=selected;
     }
     private void selectAllTimeline() {
         stopPlayback();
+        selectedAudioId=null;timelineClipSelected=true;
         rangeAnchor=0;
         rangeStart=0;
         rangeEnd=model.timeline.size()-1;
@@ -1042,7 +1057,7 @@ public final class Editor extends JFrame {
         }
     }
     private void remove() {
-        if (model.timeline.size()==1) return;
+        if (model.timeline.size()==1) {status.setText("A project needs at least one pose");return;}
         stopPlayback();
         int start=selectionStart(), end=selectionEnd();
         // Keep one exposure; never leave an empty project.
