@@ -188,7 +188,15 @@ final class CanvasView extends JComponent {
                     if (lasso.size()>2) {
                         // Segment crossed strokes at the boundary so movement/deletion
                         // affects only the enclosed vector portions, not the whole stroke.
-                        editor.prepareDrawing();
+                        boolean touchesBoundary=false;
+                        for(Model.Stroke source:editor.project().drawingAt(editor.selected()).strokes) {
+                            if(LassoMath.partition(source,lasso).size()>1) {
+                                touchesBoundary=true;
+                                break;
+                            }
+                        }
+                        // Merely selecting content must not clone a shared pose.
+                        if(touchesBoundary)editor.prepareDrawing();
                         Model.Drawing pose=editor.project().drawingAt(editor.selected());
                         List<Model.Stroke> before=new ArrayList<>(pose.strokes);
                         List<Model.Stroke> pieces=new ArrayList<>();
