@@ -310,6 +310,32 @@ public final class Model {
             }
             return drawingAt(clipIndex);
         }
+        /**
+         * Split an existing audio track clip without copying any audio bytes.
+         * The second piece starts at the same source position reached by the
+         * first piece, preserving playback pitch, timing, volume and mute state.
+         */
+        public AudioClip splitAudioClip(String clipId,int globalFrame) {
+            if(audioClips.size()>=128)throw new IllegalStateException("Maximum audio clips reached");
+            for(int i=0;i<audioClips.size();i++) {
+                AudioClip old=audioClips.get(i);
+                if(!old.id.equals(clipId))continue;
+                int before=globalFrame-old.startFrame;
+                if(before<=0 || before>=old.durationFrames)
+                    throw new IllegalArgumentException("Place the playhead inside the audio clip to split.");
+                int trailing=old.durationFrames-before;
+                long offset=old.sourceOffsetMillis+Math.round(before*1000d/fps);
+                if(offset>86_400_000L)throw new IllegalArgumentException("Audio source offset out of range.");
+                AudioClip next=new AudioClip(UUID.randomUUID().toString(),old.sourcePath,globalFrame,trailing);
+                next.sourceOffsetMillis=offset;
+                next.volume=old.volume;
+                next.muted=old.muted;
+                old.durationFrames=before;
+                audioClips.add(i+1,next);
+                return next;
+            }
+            throw new IllegalArgumentException("Audio clip not found.");
+        }
         public AudioClip addAudio(String source, int startFrame, int durationFrames) {
             if (audioClips.size() >= 128) throw new IllegalStateException("Maximum audio track clips reached");
             AudioClip clip=new AudioClip(UUID.randomUUID().toString(),source,startFrame,durationFrames);
