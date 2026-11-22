@@ -503,6 +503,7 @@ public final class MainActivity extends Activity {
                 menu.getMenu().add("Edit text").setOnMenuItemClickListener(i->{chooseText();return true;});
                 menu.getMenu().add("Move/resize image").setOnMenuItemClickListener(i->{editImagePlacement();return true;});
                 menu.getMenu().add("Remove audio").setOnMenuItemClickListener(i->{removeAudio();return true;});
+                menu.getMenu().add("Split audio at playhead").setOnMenuItemClickListener(i->{splitAudioAtPlayhead();return true;});
                 menu.getMenu().add("Import font").setOnMenuItemClickListener(i->{importFont();return true;});
         }
         menu.show();
@@ -1251,6 +1252,27 @@ public final class MainActivity extends Activity {
         },"holdframe-audio-import");
         worker.setDaemon(true);
         worker.start();
+    }
+    private void splitAudioAtPlayhead() {
+        if(model.audioClips.isEmpty()){toast("No audio clips");return;}
+        String[] titles=new String[model.audioClips.size()];
+        for(int i=0;i<titles.length;i++) {
+            Model.AudioClip clip=model.audioClips.get(i);
+            titles[i]="Audio "+(i+1)+" — "+(clip.startFrame/(float)model.fps)+"–"+
+                (clip.endFrame()/(float)model.fps)+"s";
+        }
+        new AlertDialog.Builder(this).setTitle("Split audio at playhead")
+            .setItems(titles,(dialog,which)->{
+                stopPlayback();
+                try {
+                    Model.AudioClip current=model.audioClips.get(which);
+                    model.splitAudioClip(current.id,currentFrame);
+                    changed();
+                    toast("Audio split — the two pieces share the original sound file");
+                } catch(IllegalArgumentException|IllegalStateException ex) {
+                    toast("Cannot split audio: "+ex.getMessage());
+                }
+            }).setNegativeButton("Cancel",null).show();
     }
     private void removeAudio() {
         if (model.audioClips.isEmpty()) {toast("No audio clips");return;}
