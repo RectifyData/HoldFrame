@@ -264,27 +264,7 @@ public final class MainActivity extends Activity {
         checkUpdates(false);
     }
     private void checkUpdates(boolean manual) {
-        if(manual)toast("Checking GitHub releases...");
-        new Thread(()->{
-            try {
-                ReleaseChecker.Release latest=ReleaseChecker.check();
-                String local=getPackageManager().getPackageInfo(getPackageName(),0).versionName;
-                runOnUiThread(()->{
-                    if(isFinishing()||isDestroyed())return;
-                    if(latest.newerThan(local)) {
-                        new AlertDialog.Builder(this).setTitle("HoldFrame update available")
-                            .setMessage("Installed: "+local+"\nLatest: "+latest.tag+
-                                "\n\nBack up projects before replacing a debug-signed APK: a new build may use a different signing key.")
-                            .setNegativeButton("Later",null)
-                            .setPositiveButton("View release",(dialog,which)->{
-                                startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(latest.page)));
-                            }).show();
-                    } else if(manual)toast("HoldFrame is up to date ("+local+")");
-                });
-            } catch(Exception e) {
-                if(manual)runOnUiThread(()->toast("Update check unavailable: "+e.getClass().getSimpleName()));
-            }
-        },"holdframe-updates").start();
+        AndroidUpdater.check(this, manual);
     }
 
     @Override public void onLowMemory() {
