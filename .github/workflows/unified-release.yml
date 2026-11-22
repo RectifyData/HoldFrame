@@ -1,22 +1,30 @@
-name: HoldFrame Android APK and cross-platform executable Java JAR
+name: HoldFrame - Unified Native Release
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: write
-  issues: write
+
 concurrency:
-  group: holdframe-unified-${{ github.ref }}
+  group: holdframe-release
   cancel-in-progress: false
+
 jobs:
   android:
+    name: Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
           ref: android
+      - name: Record source revision
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -24,75 +32,39 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Set up preinstalled Android SDK
-        id: sdk
+      - name: Prepare Android SDK 35
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          test -d "$SDK_ROOT"
-          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
-          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" --install 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Validate Android 12 minimum and scroll policy
-        id: validate
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          test -d "$sdk"
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          "$sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" --install 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Test model, pressure compatibility and Android 12 policy
+        shell: bash
         run: |
           set -euo pipefail
+          mkdir -p build/core-tests
+          javac --release 17 -d build/core-tests core/src/main/java/dev/rectifydata/holdframe/core/*.java core/src/test/java/dev/rectifydata/holdframe/core/*.java
+          for test in CoreTest MediaCoreTest SequenceClipboardTest PressureStrokeTest ReleaseCheckerTest SplitExposureTest SplitAudioTest; do
+            java -cp build/core-tests "dev.rectifydata.holdframe.core.$test"
+          done
           grep -Eq 'minSdk[[:space:]]*=[[:space:]]*31' app/build.gradle.kts
-          mkdir -p build/policy-tests
-          javac --release 17 -d build/policy-tests app/src/main/java/dev/rectifydata/holdframe/RamProfile.java app/src/main/java/dev/rectifydata/holdframe/TimelineScrollPolicy.java app/src/test/java/dev/rectifydata/holdframe/RamProfileTest.java app/src/test/java/dev/rectifydata/holdframe/TimelineScrollPolicyTest.java
-          java -cp build/policy-tests dev.rectifydata.holdframe.RamProfileTest
-          java -cp build/policy-tests dev.rectifydata.holdframe.TimelineScrollPolicyTest
-          mkdir -p build/release-tests
-          javac --release 17 -d build/release-tests core/src/main/java/dev/rectifydata/holdframe/core/*.java core/src/test/java/dev/rectifydata/holdframe/core/*.java
-          java -cp build/release-tests dev.rectifydata.holdframe.core.ReleaseCheckerTest
-          java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformMathTest
-          java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformProjectTest
-          java -cp build/release-tests dev.rectifydata.holdframe.core.SplitExposureTest
-          java -cp build/release-tests dev.rectifydata.holdframe.core.SplitAudioTest
-      - name: Build and sign Android APK
-        id: apk
+      - name: Build and verify signed APK
         shell: bash
         run: |
           set -euo pipefail
+          version="0.13.${{ github.run_number }}"
           gradle --no-daemon --console=plain :app:assembleDebug \
-            -PreleaseVersion="0.12.$GITHUB_RUN_NUMBER" \
-            -PbuildNumber="$((9000 + GITHUB_RUN_NUMBER))" 2>&1 | tee android-build.log
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 app/build/outputs/apk/debug/app-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | tee apk-badging.txt
-          grep -q "package: name='dev.rectifydata.holdframe'" apk-badging.txt
-          grep -q "sdkVersion:'31'" apk-badging.txt
-          unzip -t app/build/outputs/apk/debug/app-debug.apk | tail -n 2
+            -PreleaseVersion="$version" -PbuildNumber="$((13000 + ${{ github.run_number }}))"
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 "$apk"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | grep "sdkVersion:'31'"
           mkdir -p release
-          cp app/build/outputs/apk/debug/app-debug.apk release/HoldFrame-Android12-LowRAM.apk
-      - name: Compare previous-release signing identity
-        id: cert
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p previous
-          if gh release download v0.8.6 --pattern 'HoldFrame-Android12-LowRAM.apk' --dir previous; then
-            previous_cert=$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs previous/HoldFrame-Android12-LowRAM.apk | grep 'Signer #1 certificate SHA-256 digest' || true)
-            current_cert=$("$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep 'Signer #1 certificate SHA-256 digest' || true)
-            echo "Previously released APK: $previous_cert"
-            echo "New APK: $current_cert"
-            if test -n "$previous_cert" && test "$previous_cert" != "$current_cert"; then
-              echo "::warning::DEBUG SIGNING KEY ROTATED. This APK cannot upgrade the previously installed HoldFrame APK in place."
-            fi
-          fi
-      - name: Enable KVM acceleration for Android emulator
-        id: kvm
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Fresh install and launch on Android 12 emulator
-        id: emulator
+          cp "$apk" release/HoldFrame-Android12-LowRAM.apk
+      - name: Install and launch on Android 12 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 31
@@ -103,101 +75,86 @@ jobs:
           disable-animations: true
           script: |
             set -e
-            echo "Testing the exact APK released by the Android job"
             adb wait-for-device
-            adb shell getprop ro.build.version.sdk | tee emulator-sdk.txt
-            echo "INSTALL" | tee -a emulator-checkpoints.txt
-            adb install -r app/build/outputs/apk/debug/app-debug.apk 2>&1 | tee emulator-install.txt
-            echo "PACKAGE" | tee -a emulator-checkpoints.txt
-            adb shell pm path dev.rectifydata.holdframe 2>&1 | tee emulator-package.txt
-            echo "START" | tee -a emulator-checkpoints.txt
-            adb logcat -c || true
-            adb shell am start -W -n dev.rectifydata.holdframe/.MainActivity 2>&1 | tee emulator-start.txt
+            adb install -r release/HoldFrame-Android12-LowRAM.apk
+            adb shell am start -W -n dev.rectifydata.holdframe/.MainActivity
             sleep 5
-            echo "RUNNING" | tee -a emulator-checkpoints.txt
-            adb shell pidof dev.rectifydata.holdframe 2>&1 | tee emulator-pid.txt
-            test -s emulator-pid.txt
-            echo "FOREGROUND" | tee -a emulator-checkpoints.txt
-            adb shell dumpsys activity activities > emulator-activities.txt
-            grep -E 'dev.rectifydata.holdframe|MainActivity' emulator-activities.txt | head -n 12
-            echo "SUCCESS" | tee -a emulator-checkpoints.txt
-      - name: Capture Android emulator failure evidence
-        if: failure()
-        continue-on-error: true
-        shell: bash
-        run: |
-          {
-            echo '=== Emulator checkpoints ==='
-            cat emulator-checkpoints.txt 2>/dev/null || true
-            echo '=== ADB devices ==='
-            adb devices -l 2>&1 || true
-            for log in emulator-sdk.txt emulator-install.txt emulator-package.txt emulator-start.txt emulator-pid.txt; do
-              echo "=== $log ==="
-              tail -n 30 "$log" 2>/dev/null || true
-            done
-            echo '=== Android runtime crash stack ==='
-            adb logcat -d -t 400 -v time 2>/dev/null | grep -E -A 24 'FATAL EXCEPTION|AndroidRuntime|dev.rectifydata.holdframe|INSTALL_FAILED|ActivityNotFoundException' | tail -n 120 || true
-            echo '=== Emulator processes ==='
-            ps aux | grep -E 'qemu-system|emulator' | grep -v grep | head -n 10 || true
-          } > emulator-diagnostics.txt 2>&1
-      - name: Report exact Android CI failure with build diagnostics
-        if: failure()
-        continue-on-error: true
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          SDK_STEP: ${{ steps.sdk.outcome }}
-          VALIDATE_STEP: ${{ steps.validate.outcome }}
-          APK_STEP: ${{ steps.apk.outcome }}
-          CERT_STEP: ${{ steps.cert.outcome }}
-          KVM_STEP: ${{ steps.kvm.outcome }}
-          EMULATOR_STEP: ${{ steps.emulator.outcome }}
-        run: |
-          {
-            echo "HoldFrame Android build failure (run $GITHUB_RUN_NUMBER)"
-            echo "Steps: SDK=$SDK_STEP; validate=$VALIDATE_STEP; APK=$APK_STEP; cert=$CERT_STEP; KVM=$KVM_STEP; emulator=$EMULATOR_STEP"
-            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo
-            echo 'Gradle compiler diagnostic:'
-            echo '~~' '~~' 'text'
-            if test -f android-build.log; then
-              grep -Ei -A 5 'error:|^FAILURE:|^\* What went wrong|^> Task .*FAILED|cannot find symbol|unresolved reference|execution failed|does not exist' android-build.log | tail -n 100 | head -c 16000 || true
-            else
-              echo 'No Gradle compile log; failure occurred before the APK step.'
-            fi
-            echo '~~' '~~'
-            echo 'APK size:'
-            ls -lh app/build/outputs/apk/debug/*.apk 2>/dev/null || true
-            echo 'Android emulator install and launch report:'
-            if test -f emulator-diagnostics.txt; then
-              tail -n 200 emulator-diagnostics.txt | head -c 18000
-            else
-              echo 'No emulator diagnostics file. Emulation failed during setup or logs were unavailable.'
-            fi
-          } > android-failure.md
-          gh issue create -R "$GH_REPO" --title "HoldFrame Android error details ($GITHUB_RUN_NUMBER)" --body-file android-failure.md
-      - name: Upload Android failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: HoldFrame-Android-failure-${{ github.run_number }}
-          path: |
-            android-build.log
-            android-failure.md
-            emulator-*.txt
-            app/build/reports/
-          if-no-files-found: warn
+            adb shell pidof dev.rectifydata.holdframe | grep -E '[0-9]'
       - uses: actions/upload-artifact@v4
         with:
-          name: holdframe-build-android
+          name: holdframe-android
           path: release/HoldFrame-Android12-LowRAM.apk
           if-no-files-found: error
 
+  windows:
+    name: Windows interactive EXE installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: windows
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile and test Java desktop
+        shell: pwsh
+        run: |
+          ./build.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Desktop build failed" }
+          New-Item -ItemType Directory -Force build/tests | Out-Null
+          $tests = @(Get-ChildItem core/src/test/java/dev/rectifydata/holdframe/core -Filter *.java | ForEach-Object FullName)
+          $tests += @(Get-ChildItem desktop/src/test/java/dev/rectifydata/holdframe/windows -Filter *.java | ForEach-Object FullName)
+          & javac --release 17 -cp build/classes -d build/tests @tests
+          if ($LASTEXITCODE -ne 0) { throw "Desktop test compilation failed" }
+          foreach ($test in @("PressureStrokeTest","ReleaseCheckerTest")) {
+            & java -cp "build/classes;build/tests" ("dev.rectifydata.holdframe.core." + $test)
+            if ($LASTEXITCODE -ne 0) { throw "$test failed" }
+          }
+          foreach ($test in @("NativeInstallerUpdaterTest","ExportSupportTest","LassoTest")) {
+            & java -Djava.awt.headless=true -cp "build/classes;build/tests" ("dev.rectifydata.holdframe.windows." + $test)
+            if ($LASTEXITCODE -ne 0) { throw "$test failed" }
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Generate icon
+        shell: pwsh
+        run: |
+          python -m pip install pillow
+          python tools/generate_icon.py
+      - name: Package native EXE with bundled runtime
+        shell: pwsh
+        run: |
+          $version = "0.13.${{ github.run_number }}"
+          New-Item -ItemType Directory -Force release,build/version-meta/META-INF | Out-Null
+          Set-Content build/version-meta/META-INF/holdframe-version.txt $version -Encoding ascii
+          & jar --update --file dist/HoldFrame.jar -C build/version-meta META-INF/holdframe-version.txt
+          if ($LASTEXITCODE -ne 0) { throw "Version stamp failed" }
+          & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version $version --vendor RectifyData --icon assets/HoldFrame.ico
+          if ($LASTEXITCODE -ne 0) { throw "jpackage failed" }
+          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress }
+          if (-not (Test-Path $nsis)) { throw "NSIS is missing" }
+          Push-Location installers
+          & $nsis windows.nsi
+          $status = $LASTEXITCODE
+          Pop-Location
+          if ($status -ne 0) { throw "NSIS packaging failed" }
+          if (-not (Test-Path release/HoldFrame-Setup.exe)) { throw "Installer missing" }
+          Move-Item release/HoldFrame-Setup.exe release/HoldFrame-Windows-Setup.exe
+          if ((Get-Item release/HoldFrame-Windows-Setup.exe).Length -lt 1000000) { throw "Installer too small" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: holdframe-windows
+          path: release/HoldFrame-Windows-Setup.exe
+          if-no-files-found: error
 
-  java:
+  linux:
+    name: Linux Debian installer
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -206,119 +163,140 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Build executable cross-platform JAR
+      - name: Compile and regression test desktop
+        shell: bash
         run: |
           set -euo pipefail
           bash build.sh
-          test -s dist/HoldFrame.jar
-          unzip -p dist/HoldFrame.jar META-INF/MANIFEST.MF | tr -d '\r' | grep -q '^Main-Class: dev.rectifydata.holdframe.windows.HoldFrame'
-      - name: Java and timeline tests
+          javac --release 17 -cp build/classes -d build/classes core/src/test/java/dev/rectifydata/holdframe/core/*.java desktop/src/test/java/dev/rectifydata/holdframe/windows/*.java
+          for test in CoreTest PressureStrokeTest MediaCoreTest; do
+            java -cp build/classes "dev.rectifydata.holdframe.core.$test"
+          done
+          for test in NativeInstallerUpdaterTest ExportSupportTest LassoPartialTest; do
+            java -Djava.awt.headless=true -cp build/classes "dev.rectifydata.holdframe.windows.$test"
+          done
+          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.SelectionAndCursorTest
+      - name: Generate original icon
+        run: |
+          python3 -m pip install pillow
+          python3 tools/generate_icon.py
+      - name: Build native Debian package with embedded Java
+        shell: bash
         run: |
           set -euo pipefail
-          javac --release 17 -cp build/classes -d build/classes core/src/test/java/dev/rectifydata/holdframe/core/*.java desktop/src/test/java/dev/rectifydata/holdframe/windows/*.java
-          java -cp build/classes dev.rectifydata.holdframe.core.CoreTest
-          java -cp build/classes dev.rectifydata.holdframe.core.PressureStrokeTest
-          java -cp build/classes dev.rectifydata.holdframe.core.MediaCoreTest
-          java -cp build/classes dev.rectifydata.holdframe.core.SequenceClipboardTest
-          java -cp build/classes dev.rectifydata.holdframe.core.ReleaseCheckerTest
-          java -cp build/classes dev.rectifydata.holdframe.core.TextTransformMathTest
-          java -cp build/classes dev.rectifydata.holdframe.core.TextTransformProjectTest
-          java -cp build/classes dev.rectifydata.holdframe.core.SplitExposureTest
-          java -cp build/classes dev.rectifydata.holdframe.core.SplitAudioTest
-          java -cp build/classes dev.rectifydata.holdframe.core.PressureStrokeTest
-          java -cp build/classes dev.rectifydata.holdframe.windows.LassoPartialTest
-          java -cp build/classes dev.rectifydata.holdframe.windows.ShortcutSupportTest
-          java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.CanvasZoomTest
-          java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.ExportSupportTest
-          if ! command -v xvfb-run >/dev/null; then sudo apt-get update -qq && sudo apt-get install -y xvfb; fi
-          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineAutoScrollTest
-          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TimelineDragAndLayoutTest
-          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.FeatureTabsAndKeymapTest
-          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.DirectTextTransformTest
-          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.LassoPartialGuiTest
-          xvfb-run -a java -cp build/classes dev.rectifydata.holdframe.windows.TextAndFourHandleTest
-      - name: Stage Java executable
-        run: |
-          mkdir -p release
-          cp dist/HoldFrame.jar release/HoldFrame-Desktop.jar
-          mkdir -p build/version-meta/META-INF
-          printf '0.12.%s\n' "$GITHUB_RUN_NUMBER" > build/version-meta/META-INF/holdframe-version.txt
-          jar --update --file release/HoldFrame-Desktop.jar -C build/version-meta META-INF/holdframe-version.txt
-          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -q "^0.12.$GITHUB_RUN_NUMBER$"
+          version="0.13.${{ github.run_number }}"
+          mkdir -p build/version-meta/META-INF release
+          printf '%s\n' "$version" > build/version-meta/META-INF/holdframe-version.txt
+          jar --update --file dist/HoldFrame.jar -C build/version-meta META-INF/holdframe-version.txt
+          jlink --add-modules java.base,java.desktop,java.logging,java.prefs,java.net.http,java.sql \
+            --strip-debug --no-header-files --no-man-pages --output build/runtime
+          jpackage --type app-image --name HoldFrame --input dist \
+            --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame \
+            --runtime-image build/runtime --icon assets/HoldFrame.png \
+            --dest packaged --app-version "$version" --vendor RectifyData
+          mkdir -p pkg/DEBIAN pkg/opt/holdframe pkg/usr/share/applications pkg/usr/share/icons/hicolor/256x256/apps
+          cp -a packaged/HoldFrame/. pkg/opt/holdframe/
+          cat > pkg/DEBIAN/control <<EOF
+          Package: holdframe
+          Version: $version
+          Section: graphics
+          Priority: optional
+          Architecture: amd64
+          Maintainer: RectifyData
+          Depends: libc6 (>= 2.34), libasound2 | libasound2t64, libx11-6
+          Description: HoldFrame animation editor
+           Installed vector-animation editor with bundled runtime.
+          EOF
+          cat > pkg/usr/share/applications/holdframe.desktop <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=HoldFrame
+          GenericName=Animation editor
+          Exec=/opt/holdframe/bin/HoldFrame
+          Icon=holdframe
+          Categories=Graphics;2DGraphics;
+          Terminal=false
+          EOF
+          cp assets/HoldFrame.png pkg/usr/share/icons/hicolor/256x256/apps/holdframe.png
+          dpkg-deb --root-owner-group -Zgzip -z1 --build pkg release/HoldFrame-Linux-amd64.deb
+          dpkg-deb --contents release/HoldFrame-Linux-amd64.deb | grep -F '/opt/holdframe/bin/HoldFrame'
       - uses: actions/upload-artifact@v4
         with:
-          name: holdframe-build-java
-          path: release/HoldFrame-Desktop.jar
+          name: holdframe-linux
+          path: release/HoldFrame-Linux-amd64.deb
           if-no-files-found: error
 
-  unified-release:
-    needs: [android, java]
+  publish:
+    name: Publish one complete three-platform prerelease
+    needs: [android, windows, linux]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: main
       - uses: actions/download-artifact@v4
         with:
-          pattern: holdframe-build-*
-          path: collected
-      - name: Prepare and verify two direct release assets
+          pattern: holdframe-*
+          merge-multiple: true
+          path: release
+      - name: Validate all three installers and create checksums
+        shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          from shutil import copyfile
-          from zipfile import ZipFile, is_zipfile
-          sources={
-            'holdframe-build-android/HoldFrame-Android12-LowRAM.apk':'HoldFrame-Android12-LowRAM.apk',
-            'holdframe-build-java/HoldFrame-Desktop.jar':'HoldFrame-Desktop.jar',
-          }
-          release=Path('release')
-          release.mkdir(exist_ok=True)
-          for source,name in sources.items():
-            inp=Path('collected')/source
-            if not inp.is_file():
-              matches=list((Path('collected')/source.split('/')[0]).rglob(name))
-              if len(matches)!=1:
-                raise RuntimeError(f'Missing/ambiguous asset {source}: {matches}')
-              inp=matches[0]
-            if inp.stat().st_size<1000 or not is_zipfile(inp):
-              raise RuntimeError(f'Invalid APK or JAR: {inp}')
-            copyfile(inp,release/name)
-            print(name,(release/name).stat().st_size)
-          with ZipFile(release/'HoldFrame-Desktop.jar') as jar:
-            manifest=jar.read('META-INF/MANIFEST.MF').decode('utf-8')
-            if 'Main-Class: dev.rectifydata.holdframe.windows.HoldFrame' not in manifest or jar.testzip():
-              raise RuntimeError('Java executable invalid')
-          with ZipFile(release/'HoldFrame-Android12-LowRAM.apk') as apk:
-            if 'AndroidManifest.xml' not in apk.namelist() or apk.testzip():
-              raise RuntimeError('Android APK invalid')
-          if {p.name for p in release.iterdir()}!=set(sources.values()):
-            raise RuntimeError('Release must contain exactly two build outputs')
-          PY
-      - name: Upload verified APK and JAR for privileged release publication
-        uses: actions/upload-artifact@v4
-        with:
-          name: holdframe-verified-release-assets
-          path: |
-            release/HoldFrame-Android12-LowRAM.apk
-            release/HoldFrame-Desktop.jar
-          if-no-files-found: error
-          retention-days: 14
-
-  report-build-failure:
-    needs: [android, java, unified-release]
-    if: ${{ always() && (needs.android.result == 'failure' || needs.java.result == 'failure' || needs.unified-release.result == 'failure') }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report failed platform
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          A_STATUS: ${{ needs.android.result }}
-          J_STATUS: ${{ needs.java.result }}
-          R_STATUS: ${{ needs.unified-release.result }}
+          cd release
+          for name in HoldFrame-Android12-LowRAM.apk HoldFrame-Windows-Setup.exe HoldFrame-Linux-amd64.deb; do
+            test -s "$name"
+          done
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 3
+          unzip -t HoldFrame-Android12-LowRAM.apk >/dev/null
+          dpkg-deb --info HoldFrame-Linux-amd64.deb >/dev/null
+          test "$(stat -c '%s' HoldFrame-Windows-Setup.exe)" -gt 1000000
+          sha256sum HoldFrame-Android12-LowRAM.apk HoldFrame-Windows-Setup.exe HoldFrame-Linux-amd64.deb > SHA256SUMS.txt
+      - name: Write release notes with platform downloads
+        shell: bash
         run: |
-          gh issue create -R "$GH_REPO" --title "HoldFrame two-file build failure ($GITHUB_RUN_NUMBER)" \
-            --body "Android=$A_STATUS; Java=$J_STATUS; Release=$R_STATUS. Logs: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          cat > release-notes.md <<'EOF'
+          ## HoldFrame 0.13 — all platforms
+
+          A single prerelease contains every installable platform build, produced together from passing CI jobs.
+
+          | Platform | Download | Install |
+          | --- | --- | --- |
+          | Android 12+ | **HoldFrame-Android12-LowRAM.apk** | Open the APK; Android asks for installation approval |
+          | Windows 10/11 (x64) | **HoldFrame-Windows-Setup.exe** | Run the visible setup wizard; no separate Java install |
+          | Linux (Debian/Ubuntu x64) | **HoldFrame-Linux-amd64.deb** | Install with the system package manager; runtime included |
+
+          ### Changes
+          - Delete removes the selected pose/audio clip; Esc deselects.
+          - Black brush dot and pressure-responsive stroke thickness.
+          - KMBS persists brush size across sessions.
+          - HFM5 saves pressure samples; old HFM1–HFM4 projects remain readable.
+          - In-app download flow hands installation to the operating system rather than silently installing.
+
+          **Preview build:** Android APK is debug-signed, and physical-device testing is not guaranteed. Signature changes can prevent upgrades in place; export/backup projects before replacing the app. Older app versions cannot necessarily reopen HFM5 files.
+
+          The included SHA256SUMS.txt verifies all three installers. Older releases are retained for reference and marked as legacy previews.
+          EOF
+          echo >> release-notes.md
+          echo "Build: $GITHUB_RUN_ID; orchestrator commit: $GITHUB_SHA" >> release-notes.md
+      - name: Publish atomically as one GitHub prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.HOLDFRAME_RELEASE_TOKEN || github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag="v0.13.${{ github.run_number }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Tag already exists; refusing to overwrite published downloads"
+            exit 1
+          fi
+          gh release create "$tag" \
+            release/HoldFrame-Android12-LowRAM.apk \
+            release/HoldFrame-Windows-Setup.exe \
+            release/HoldFrame-Linux-amd64.deb \
+            release/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "HoldFrame $tag — Android, Windows & Linux" \
+            --notes-file release-notes.md --prerelease
+          gh release view "$tag" --json assets --jq '.assets[].name' | sort > actual-assets.txt
+          printf '%s\n' HoldFrame-Android12-LowRAM.apk HoldFrame-Windows-Setup.exe HoldFrame-Linux-amd64.deb SHA256SUMS.txt | sort > expected-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
