@@ -48,6 +48,7 @@ jobs:
           java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformMathTest
           java -cp build/release-tests dev.rectifydata.holdframe.core.TextTransformProjectTest
           java -cp build/release-tests dev.rectifydata.holdframe.core.SplitExposureTest
+          java -cp build/release-tests dev.rectifydata.holdframe.core.SplitAudioTest
       - name: Build and sign Android APK
         id: apk
         shell: bash
@@ -222,6 +223,7 @@ jobs:
           java -cp build/classes dev.rectifydata.holdframe.core.TextTransformMathTest
           java -cp build/classes dev.rectifydata.holdframe.core.TextTransformProjectTest
           java -cp build/classes dev.rectifydata.holdframe.core.SplitExposureTest
+          java -cp build/classes dev.rectifydata.holdframe.core.SplitAudioTest
           java -cp build/classes dev.rectifydata.holdframe.windows.LassoPartialTest
           java -cp build/classes dev.rectifydata.holdframe.windows.ShortcutSupportTest
           java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.CanvasZoomTest
@@ -302,7 +304,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="v0.11.${{ github.run_number }}"
-          notes="HoldFrame: Split at Playhead (Ctrl+B / Animate tab), vector-accurate lasso selection, undoable Edit/Delete of selected objects, Android text deletion, four-corner text transforms, Windows/Linux shortcut creation and existing canvas zoom/updater. Exactly two attachments: Android 12+ experimental APK and executable Java 17+ JAR for Windows/Linux. Debug APK may require backing up app data before reinstalling; device testing is still recommended."
+          notes="HoldFrame: Split animation and selected audio at playhead, vector-accurate lasso selection, undoable Edit/Delete of selected objects, Android text deletion, four-corner text transforms, Windows/Linux shortcut creation and existing canvas zoom/updater. Exactly two attachments: Android 12+ experimental APK and executable Java 17+ JAR for Windows/Linux. Debug APK may require backing up app data before reinstalling; device testing is still recommended."
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --target "$GITHUB_SHA" \
               --title "HoldFrame $tag (Android APK + Java JAR)" \
