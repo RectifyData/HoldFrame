@@ -139,8 +139,19 @@ public final class AndroidUpdater {
                             .setNegativeButton("Later",null)
                             .setPositiveButton("Install",(d,w)->{
                                 try {
-                                    Intent install=new Intent(Intent.ACTION_VIEW);
-                                    install.setDataAndType(uri,"application/vnd.android.package-archive");
+                                    if(!activity.getPackageManager().canRequestPackageInstalls()){
+                                        new AlertDialog.Builder(activity).setTitle("Allow app updates")
+                                            .setMessage("Android requires permission for HoldFrame to open its downloaded APK in the system installer. Enable 'Allow from this source', then return to Downloads to install.")
+                                            .setNegativeButton("Cancel",null)
+                                            .setPositiveButton("Open settings",(prompt,button)->{
+                                                Intent settings=new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                                    Uri.parse("package:"+activity.getPackageName()));
+                                                activity.startActivity(settings);
+                                            }).show();
+                                        return;
+                                    }
+                                    Intent install=new Intent(Intent.ACTION_INSTALL_PACKAGE);
+                                    install.setData(uri);
                                     install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_ACTIVITY_NEW_TASK);
                                     activity.startActivity(install);
                                 }catch(Exception e){
