@@ -213,3 +213,8 @@ Create application shortcuts** and choose Desktop and/or Start Menu/Applications
 For a portable JAR, this copies it to a stable per-user install directory.
 The optional NSIS Windows setup source also provides visible install progress,
 shortcut choices and an optional launch on Finish. No silent installation.
+
+**Split audio:** Select an audio clip in the timeline, place the playhead
+inside it, then use **Media → Split audio** or **Edit → Split selected audio
+at playhead**. The second piece retains the same source file, volume and mute
+settings, and picks up from the exact corresponding source offset.
