@@ -8,6 +8,8 @@ import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Cursor;
+import java.awt.Toolkit;
+import java.awt.Point;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
@@ -47,11 +49,16 @@ final class CanvasView extends JComponent {
         geometry();
         panX+=focusX-(left+dx*scale);
         panY+=focusY-(top+dy*scale);
+        lastCursorDiameter=-1;applyBrushCursor();
         repaint();
     }
 
     private Color ink = new Color(0x171717);
     private float brush = 6;
+    private float expressivePressure=1f;
+    private int lastCursorDiameter=-1;
+    private long lastDragNanos;
+    private float lastDragX,lastDragY;
     private Tool tool = Tool.PEN;
     private boolean onion = true, previousOnion = true, nextOnion = true;
     private Drag drag = Drag.NONE;
@@ -71,10 +78,10 @@ final class CanvasView extends JComponent {
         this.editor = editor;
         setOpaque(true);
         setBackground(new Color(0xE6E9ED));
-        setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+        applyBrushCursor();
         MouseAdapter mouse = new MouseAdapter() {
             @Override public void mouseMoved(MouseEvent event) {
-                if (tool != Tool.LASSO && tool != Tool.TEXT) return;
+                if(tool==Tool.PEN||tool==Tool.ERASER) { expressivePressure=1f;applyBrushCursor();return; }
                 Model.Point pt=toPoint(event);
                 Rectangle2D.Float b=selectionBounds();
                 Corner corner=b==null ? null : cornerAt(pt,b);
@@ -123,7 +130,12 @@ final class CanvasView extends JComponent {
                     editor.prepareDrawing();
                     clearSelection();
                     preview = new Model.Stroke(ink.getRGB(),brush,tool==Tool.ERASER);
+                    expressivePressure=1f;
+                    lastDragNanos=System.nanoTime();
+                    lastDragX=pt.x;lastDragY=pt.y;
                     preview.points.add(pt);
+                    preview.pressures.add(expressivePressure);
+                    applyBrushCursor();
                     drag = Drag.DRAW;
                 } else {
                     int tappedText=hitText(pt);
@@ -164,8 +176,18 @@ final class CanvasView extends JComponent {
                 Model.Point pt = toPoint(event);
                 if (drag == Drag.DRAW && preview != null) {
                     Model.Point prev = preview.points.get(preview.points.size()-1);
-                    if (Math.abs(prev.x-pt.x)>0.05 || Math.abs(prev.y-pt.y)>0.05)
-                        preview.points.add(pt);
+                    if (Math.abs(prev.x-pt.x)>0.05 || Math.abs(prev.y-pt.y)>0.05) {
+                        long now=System.nanoTime();
+                        float dt=Math.max(.005f,Math.min(.2f,(now-lastDragNanos)/1_000_000_000f));
+                        float speed=(float)Math.hypot(pt.x-lastDragX,pt.y-lastDragY)/dt;
+                        // Mouse fallback: slower strokes are fuller, faster strokes taper.
+                        // Java AWT does not provide tablet pressure; Android uses actual MotionEvent pressure.
+                        float target=Math.max(.28f,Math.min(1.35f,1.3f-0.00065f*speed));
+                        expressivePressure=expressivePressure*.7f+target*.3f;
+                        preview.points.add(pt);preview.pressures.add(expressivePressure);
+                        lastDragNanos=now;lastDragX=pt.x;lastDragY=pt.y;
+                        applyBrushCursor();
+                    }
                 } else if (drag == Drag.SELECT) {
                     if (lasso.isEmpty() || distance(lasso.get(lasso.size()-1),pt)>1.5)
                         lasso.add(pt);
@@ -176,13 +198,14 @@ final class CanvasView extends JComponent {
             }
             @Override public void mouseReleased(MouseEvent event) {
                 if(panning) {
-                    panning=false;setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));return;
+                    panning=false;applyBrushCursor();return;
                 }
                 if (drag == Drag.DRAW && preview != null) {
                     // The project changes only on mouse release; the preview is not saved on cancel.
                     editor.project().drawingAt(editor.selected()).strokes.add(preview);
                     editor.strokeAdded(preview);
                     preview = null;
+                    expressivePressure=1f;applyBrushCursor();
                     invalidateDrawing();
                 } else if (drag == Drag.SELECT) {
                     if (lasso.size()>2) {
@@ -256,7 +279,8 @@ final class CanvasView extends JComponent {
     void setTool(Tool next) {
         tool=next;
         clearSelection();
-        setCursor(Cursor.getPredefinedCursor(tool==Tool.TEXT ? Cursor.TEXT_CURSOR : Cursor.CROSSHAIR_CURSOR));
+        if(tool==Tool.PEN||tool==Tool.ERASER)applyBrushCursor();
+        else setCursor(Cursor.getPredefinedCursor(tool==Tool.TEXT ? Cursor.TEXT_CURSOR : Cursor.CROSSHAIR_CURSOR));
         repaint();
     }
     Tool getTool() { return tool; }
@@ -282,7 +306,24 @@ final class CanvasView extends JComponent {
     }
     void setInk(Color color) { ink=color; }
     Color getInk() { return ink; }
-    void setBrush(float size) { brush=size; }
+    void setBrush(float size) { brush=Math.max(1,Math.min(60,size)); applyBrushCursor(); }
+    /** Small black filled brush dot; white 1px outline remains visible over dark ink. */
+    private void applyBrushCursor() {
+        if(tool!=Tool.PEN&&tool!=Tool.ERASER)return;
+        int diameter=Math.max(2,Math.min(48,Math.round(brush*expressivePressure*scale)));
+        if(diameter==lastCursorDiameter)return;
+        lastCursorDiameter=diameter;
+        try {
+            int size=Math.max(24,diameter+6),center=size/2;
+            BufferedImage img=new BufferedImage(size,size,BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g=img.createGraphics();
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);
+            g.setColor(Color.WHITE);g.fillOval(center-(diameter+2)/2,center-(diameter+2)/2,diameter+2,diameter+2);
+            g.setColor(Color.BLACK);g.fillOval(center-diameter/2,center-diameter/2,diameter,diameter);
+            g.dispose();
+            setCursor(Toolkit.getDefaultToolkit().createCustomCursor(img,new Point(center,center),"HoldFrame brush"));
+        } catch(RuntimeException ex) {setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));}
+    }
     void setOnion(boolean visible) { onion=visible; repaint(); }
     void setPreviousOnion(boolean visible) { previousOnion=visible; repaint(); }
     void setNextOnion(boolean visible) { nextOnion=visible; repaint(); }
@@ -474,11 +515,19 @@ final class CanvasView extends JComponent {
         if (stroke.points.isEmpty()) return;
         g.setComposite(stroke.eraser ? AlphaComposite.Clear : AlphaComposite.SrcOver);
         g.setColor(new Color(stroke.color,true));
+        boolean pressure=!stroke.pressures.isEmpty()&&stroke.pressures.size()==stroke.points.size();
         g.setStroke(new BasicStroke(stroke.width,BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
         if (stroke.points.size()==1) {
             Model.Point p=stroke.points.get(0);
-            g.fillOval(Math.round(p.x-stroke.width/2),Math.round(p.y-stroke.width/2),
-                       Math.max(1,Math.round(stroke.width)),Math.max(1,Math.round(stroke.width)));
+            float width=stroke.width*(pressure?stroke.pressures.get(0):1f);
+            g.fill(new java.awt.geom.Ellipse2D.Float(p.x-width/2,p.y-width/2,width,width));
+        } else if(pressure) {
+            for(int i=1;i<stroke.points.size();i++) {
+                Model.Point a=stroke.points.get(i-1),b=stroke.points.get(i);
+                float width=stroke.width*(stroke.pressures.get(i-1)+stroke.pressures.get(i))*.5f;
+                g.setStroke(new BasicStroke(Math.max(.1f,width),BasicStroke.CAP_ROUND,BasicStroke.JOIN_ROUND));
+                g.draw(new java.awt.geom.Line2D.Float(a.x,a.y,b.x,b.y));
+            }
         } else {
             Path2D.Float path=new Path2D.Float();
             path.moveTo(stroke.points.get(0).x,stroke.points.get(0).y);
