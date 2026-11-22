@@ -1,0 +1,49 @@
+name: HoldFrame - Label Legacy Releases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/archive-legacy-releases.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Label older preview releases without deleting files or tags
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.HOLDFRAME_RELEASE_TOKEN || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release list --limit 100 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease == true) | .tagName' > legacy-candidates.txt
+          updated=0
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] || continue
+            # Keep current unified releases exactly as they are.
+            [[ "$tag" =~ ^v0\.13\.[0-9]+$ ]] && continue
+            case "$tag" in
+              v0.*|android-*|windows-*|linux-*|core-*) ;;
+              *) continue ;;
+            esac
+            title=$(gh release view "$tag" --json name --jq .name)
+            [[ "$title" != "[Legacy preview]"* ]] || continue
+            gh release view "$tag" --json body --jq .body > existing-notes.md
+            {
+              printf '%s\n\n' '> **Archived preview:** This is a historical version. For the current Android APK, Windows EXE and Linux DEB together, see [HoldFrame releases](https://github.com/RectifyData/HoldFrame/releases).'
+              cat existing-notes.md
+            } > archived-notes.md
+            gh release edit "$tag" \
+              --title "[Legacy preview] $title" \
+              --notes-file archived-notes.md --prerelease
+            updated=$((updated+1))
+            echo "Labeled $tag"
+          done < legacy-candidates.txt
+          echo "Archived $updated older prereleases. All tags and assets were preserved."
