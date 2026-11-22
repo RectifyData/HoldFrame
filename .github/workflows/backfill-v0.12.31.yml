@@ -8,6 +8,8 @@ on:
 
 permissions:
   contents: write
+  actions: read
+  issues: write
 
 jobs:
   windows:
@@ -22,6 +24,7 @@ jobs:
           distribution: temurin
           java-version: '21'
       - name: Compile desktop and regression tests
+        id: build
         shell: pwsh
         run: |
           ./build.ps1
@@ -43,35 +46,85 @@ jobs:
         with:
           python-version: '3.12'
       - name: Generate Windows icon
+        id: icon
         shell: pwsh
         run: |
           python -m pip install pillow
           python tools/generate_icon.py
       - name: Create visible native EXE installer with bundled Java
+        id: installer
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force release,build/version-meta/META-INF | Out-Null
           Set-Content build/version-meta/META-INF/holdframe-version.txt "0.12.31" -Encoding ascii
           & jar --update --file dist/HoldFrame.jar -C build/version-meta META-INF/holdframe-version.txt
-          if ($LASTEXITCODE -ne 0) { throw "Version stamp failed" }
+          if ($LASTEXITCODE -ne 0) { throw "Version stamp failed (jar --update)" }
+          if (-not (Test-Path dist/HoldFrame.jar)) { throw "Compiled HoldFrame.jar missing" }
           & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version "0.12.31" --vendor RectifyData --icon assets/HoldFrame.ico
-          if ($LASTEXITCODE -ne 0) { throw "jpackage failed" }
-          $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          if (-not (Test-Path $nsis)) { choco install nsis -y --no-progress }
-          if (-not (Test-Path $nsis)) { throw "NSIS unavailable" }
-          Push-Location installers
-          & $nsis windows.nsi
-          $status = $LASTEXITCODE
-          Pop-Location
-          if ($status -ne 0) { throw "NSIS packaging failed" }
-          Move-Item release/HoldFrame-Setup.exe release/HoldFrame-Windows-Setup.exe
-          if ((Get-Item release/HoldFrame-Windows-Setup.exe).Length -lt 1000000) { throw "Installer too small" }
+          if ($LASTEXITCODE -ne 0) { throw "jpackage app-image failed, code $LASTEXITCODE" }
+          if (-not (Test-Path packaged/HoldFrame/HoldFrame.exe)) { throw "jpackage launcher missing: packaged/HoldFrame/HoldFrame.exe" }
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\NSIS\makensis.exe",
+            "$env:ProgramFiles\NSIS\makensis.exe",
+            "$env:ChocolateyInstall\bin\makensis.exe"
+          )
+          $nsis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $nsis) {
+            $command = Get-Command makensis.exe -ErrorAction SilentlyContinue
+            if ($command) { $nsis = $command.Source }
+          }
+          if (-not $nsis) {
+            Write-Host "Installing NSIS build dependency..."
+            & choco install nsis -y --no-progress
+            $nsis = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $nsis) {
+              $command = Get-Command makensis.exe -ErrorAction SilentlyContinue
+              if ($command) { $nsis = $command.Source }
+            }
+          }
+          $nsisSucceeded = $false
+          if ($nsis) {
+            Write-Host "Building interactive NSIS setup with $nsis"
+            try {
+              Push-Location installers
+              try {
+                & $nsis windows.nsi
+                $nsisCode = $LASTEXITCODE
+              } finally {
+                Pop-Location
+              }
+              if ($nsisCode -eq 0 -and (Test-Path release/HoldFrame-Setup.exe)) {
+                Move-Item release/HoldFrame-Setup.exe release/HoldFrame-Windows-Setup.exe -Force
+                $nsisSucceeded = $true
+              } else {
+                Write-Warning "NSIS error code $nsisCode or installer missing. Trying native jpackage EXE."
+              }
+            } catch {
+              Write-Warning "NSIS failed: $_. Trying native jpackage EXE."
+            }
+          } else {
+            Write-Warning "NSIS not found. Trying native jpackage EXE."
+          }
+          if (-not $nsisSucceeded) {
+            & jpackage --type exe --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest release --app-version "0.12.31" --vendor RectifyData --icon assets/HoldFrame.ico --win-dir-chooser --win-menu --win-shortcut --win-menu-group HoldFrame
+            if ($LASTEXITCODE -ne 0) { throw "NSIS and jpackage EXE failed; code $LASTEXITCODE" }
+            $exes = @(Get-ChildItem release -Filter '*.exe' -File)
+            if ($exes.Count -ne 1) { throw "Expected one jpackage EXE, got $($exes.Count)" }
+            Move-Item $exes[0].FullName release/HoldFrame-Windows-Setup.exe -Force
+          }
+          if (-not (Test-Path release/HoldFrame-Windows-Setup.exe)) { throw "Native setup missing" }
+          $bytes = (Get-Item release/HoldFrame-Windows-Setup.exe).Length
+          if ($bytes -lt 1000000) { throw "Installer too small" }
+          Write-Host "Verified interactive installer: $bytes bytes"
       - uses: actions/upload-artifact@v4
+        id: artifact
         with:
           name: holdframe-v0.12.31-windows-setup
           path: release/HoldFrame-Windows-Setup.exe
           if-no-files-found: error
       - name: Publish PC setup into existing Android v0.12.31 release
+        id: publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.HOLDFRAME_RELEASE_TOKEN || github.token }}
@@ -114,3 +167,17 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Unable to update release details" }
           }
           Write-Host "Verified downloads at https://github.com/$env:GH_REPO/releases/tag/$tag"
+
+      - name: Report failing step to GitHub Issues
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $status = "Compile=${{ steps.build.outcome }}, Icon=${{ steps.icon.outcome }}, Installer=${{ steps.installer.outcome }}, Artifact=${{ steps.artifact.outcome }}, Publish=${{ steps.publish.outcome }}"
+          Write-Host "FAILED WORKFLOW STEPS: $status"
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $body = "HoldFrame Windows v0.12.31 failed." + [Environment]::NewLine + "Run: $runUrl" + [Environment]::NewLine + "Steps: $status" + [Environment]::NewLine + "Inspect the first error in the failing step."
+          & gh issue create --repo $env:GH_REPO --title "HoldFrame Windows v0.12.31 installer build failed" --body $body
