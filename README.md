@@ -63,3 +63,11 @@ supports editing/removing its selected text objects through Media → More.
 shortcuts, users choose Desktop or Start Menu/Applications. The optional
 Windows NSIS installer source includes a visible wizard, selectable
 shortcuts, and optional launch on completion. No silent installation.
+
+## Update, selection, and brush preferences
+
+- Android: **File → More → Check for updates** now downloads a compatible HoldFrame APK from GitHub Releases inside the app, displays progress and asks before handing installation to Android's visible Package Installer. Android still enforces matching signing keys.
+- Windows/Linux: press **Esc** to clear canvas/timeline/audio selection. Use **KMBS (Keep My Brush Size)** beside the brush slider to retain its last size across sessions; disable KMBS to start with the default brush size next time.
+- Android: press **Esc** on a hardware keyboard to deselect text and timeline ranges. **File → More → Keep My Brush Size (KMBS)** controls whether the selected brush width is restored on restart.
+
+Updates never use silent installation; projects should be backed up before replacing debug-signed builds.
