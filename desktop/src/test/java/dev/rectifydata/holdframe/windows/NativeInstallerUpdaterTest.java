@@ -11,6 +11,11 @@ public final class NativeInstallerUpdaterTest {
     ok(linux!=null&&linux.version.equals("0.12.8")&&linux.asset.equals("HoldFrame-Linux-amd64.deb"),"Linux package");
     ok(NativeInstallerUpdater.parse(json,"0.12.9","windows")==null,"already updated");
     ok(NativeInstallerUpdater.parse(json.replace("https://github.com/RectifyData/HoldFrame","https://evil.example"),"0.12.1","windows")==null,"reject other hosts");
+    String current="{\"tag_name\":\"v0.13.41\",\"assets\":[{\"name\":\"HoldFrame-Windows-Setup.exe\",\"browser_download_url\":\"https://github.com/RectifyData/HoldFrame/releases/download/v0.13.41/HoldFrame-Windows-Setup.exe\"},{\"name\":\"HoldFrame-Linux-amd64.deb\",\"browser_download_url\":\"https://github.com/RectifyData/HoldFrame/releases/download/v0.13.41/HoldFrame-Linux-amd64.deb\"}]}";
+    var newWin=NativeInstallerUpdater.parse("["+current+","+w+"]","0.12.9","windows");
+    ok(newWin!=null&&newWin.tag.equals("v0.13.41")&&newWin.asset.equals("HoldFrame-Windows-Setup.exe"),"consolidated Windows release");
+    var newLinux=NativeInstallerUpdater.parse("["+current+","+l+"]","0.12.9","linux");
+    ok(newLinux!=null&&newLinux.tag.equals("v0.13.41"),"consolidated Linux release");
     System.out.println("NativeInstallerUpdaterTest passed");
   }
 }

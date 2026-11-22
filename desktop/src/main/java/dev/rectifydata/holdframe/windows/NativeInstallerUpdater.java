@@ -32,7 +32,7 @@ final class NativeInstallerUpdater {
     private NativeInstallerUpdater() {}
     private static final String API="https://api.github.com/repos/RectifyData/HoldFrame/releases?per_page=60";
     private static final String BASE="https://github.com/RectifyData/HoldFrame/releases/download/";
-    private static final Pattern TAG=Pattern.compile("\\\"tag_name\\\"\\s*:\\s*\\\"((?:windows|linux)-v([0-9]+\\.[0-9]+\\.[0-9]+))\\\"");
+    private static final Pattern TAG=Pattern.compile("\\\"tag_name\\\"\\s*:\\s*\\\"((?:(?:windows|linux)-)?v([0-9]+\\.[0-9]+\\.[0-9]+))\\\"");
     private static final Pattern LINK=Pattern.compile("\\\"browser_download_url\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
     private static final Pattern DIGEST=Pattern.compile("\\\"digest\\\"\\s*:\\s*\\\"sha256:([a-fA-F0-9]{64})\\\"");
     static final class Update {
@@ -47,7 +47,7 @@ final class NativeInstallerUpdater {
         String os=System.getProperty("os.name","").toLowerCase(java.util.Locale.ROOT);
         return os.contains("win")?"windows":os.contains("linux")?"linux":"unsupported";
     }
-    static String assetFor(String platform){return platform.equals("windows")?"HoldFrame-Setup.exe":platform.equals("linux")?"HoldFrame-Linux-amd64.deb":"";}
+    static String assetFor(String platform){return platform.equals("windows")?"HoldFrame-Windows-Setup.exe":platform.equals("linux")?"HoldFrame-Linux-amd64.deb":"";}
     /** Constrained parser: only accepts official GitHub URLs and the expected native asset. */
     static Update parse(String response,String installed,String platform) {
         if(response==null||response.length()>2_000_000)throw new IllegalArgumentException("Invalid release list");
@@ -57,7 +57,9 @@ final class NativeInstallerUpdater {
         Update best=null;
         while(tags.find()) {
             String tag=tags.group(1),version=tags.group(2);
-            if(!tag.startsWith(platform+"-v")||ReleaseChecker.compare(version,installed)<=0)continue;
+            boolean unified=tag.startsWith("v");
+            if((!unified&&!tag.startsWith(platform+"-v"))||ReleaseChecker.compare(version,installed)<=0)continue;
+            String assetName=unified?expected:platform.equals("windows")?"HoldFrame-Setup.exe":expected;
             int from=tags.end(),to=response.length();
             Matcher next=TAG.matcher(response);
             if(next.find(from))to=next.start();
@@ -66,14 +68,14 @@ final class NativeInstallerUpdater {
             Matcher links=LINK.matcher(block);
             while(links.find()) {
                 String url=links.group(1);
-                if(!url.equals(BASE+tag+"/"+expected))continue;
+                if(!url.equals(BASE+tag+"/"+assetName))continue;
                 int start=Math.max(0,block.lastIndexOf('{',links.start()));
                 int end=block.indexOf('}',links.end());
                 String asset=block.substring(start,end<0?block.length():end+1);
                 Matcher hash=DIGEST.matcher(asset);
                 String sha=hash.find()?hash.group(1).toLowerCase(java.util.Locale.ROOT):"";
                 if(best==null||ReleaseChecker.compare(version,best.version)>0)
-                    best=new Update(version,tag,url,expected,sha);
+                    best=new Update(version,tag,url,assetName,sha);
             }
         }
         return best;
