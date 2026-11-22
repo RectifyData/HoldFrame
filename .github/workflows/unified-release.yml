@@ -295,79 +295,15 @@ jobs:
           if {p.name for p in release.iterdir()}!=set(sources.values()):
             raise RuntimeError('Release must contain exactly two build outputs')
           PY
-      - name: Publish both files under one GitHub tag (no combined ZIP)
-        id: publish
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.HOLDFRAME_RELEASE_TOKEN || github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          tag="v0.11.${{ github.run_number }}"
-          notes="HoldFrame: Split animation and selected audio at playhead, vector-accurate lasso selection, undoable Edit/Delete of selected objects, Android text deletion, four-corner text transforms, Windows/Linux shortcut creation and existing canvas zoom/updater. Exactly two attachments: Android 12+ experimental APK and executable Java 17+ JAR for Windows/Linux. Debug APK may require backing up app data before reinstalling; device testing is still recommended."
-          echo "Attempting GitHub prerelease $tag on $GH_REPO"
-          echo "Workflow actor: $GITHUB_ACTOR; event: $GITHUB_EVENT_NAME"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            created=0
-            for attempt in 1 2 3 4; do
-              echo "Creating GitHub release attempt $attempt" | tee -a publish.log
-              if gh release create "$tag" --target "$GITHUB_SHA" \
-                   --title "HoldFrame $tag (Android APK + Java JAR)" \
-                   --notes "$notes" --prerelease 2>&1 | tee -a publish.log; then
-                created=1
-                break
-              fi
-              if gh release view "$tag" >/dev/null 2>&1; then
-                created=1
-                break
-              fi
-              sleep $((attempt * 10))
-            done
-            if [ "$created" -ne 1 ]; then
-              echo "::error::Release creation denied; ensure Actions 'contents: write' permission or configure HOLDFRAME_RELEASE_TOKEN repository secret." | tee -a publish.log
-              gh api "repos/$GH_REPO" --jq '{name:.full_name,permissions:.permissions,visibility:.visibility}' >> publish.log 2>&1 || true
-              exit 1
-            fi
-          fi
-          for asset in release/HoldFrame-Android12-LowRAM.apk release/HoldFrame-Desktop.jar; do
-            success=0
-            for attempt in 1 2 3; do
-              if gh release upload "$tag" "$asset" --clobber 2>&1 | tee -a publish.log; then
-                success=1; break
-              fi
-              sleep 5
-            done
-            if [ "$success" -ne 1 ]; then
-              echo "::error::Failed to upload $asset" | tee -a publish.log
-              exit 1
-            fi
-          done
-          while IFS= read -r extra; do
-            case "$extra" in
-              HoldFrame-Android12-LowRAM.apk|HoldFrame-Desktop.jar) ;;
-              *) gh release delete-asset "$tag" "$extra" --yes 2>&1 | tee -a publish.log ;;
-            esac
-          done < <(gh release view "$tag" --json assets --jq '.assets[].name')
-          gh release edit "$tag" --title "HoldFrame $tag (Android APK + Java JAR)" \
-            --notes "$notes" --prerelease
-          gh release view "$tag" --json assets --jq '.assets[].name' | sort > actual.txt
-          printf '%s\n' HoldFrame-Android12-LowRAM.apk HoldFrame-Desktop.jar > expected.txt
-          diff -u expected.txt actual.txt
-          echo "Verified exactly two assets in $tag."
-      - name: Report failed release publication
-        if: failure()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          {
-            echo 'HoldFrame direct APK/JAR publication failed.'
-            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            find collected -type f -printf '%p %s bytes\n' 2>/dev/null || true
-            if test -f publish.log; then tail -n 70 publish.log; fi
-          } > failure.md
-          gh issue create -R "$GH_REPO" --title "HoldFrame two-file release publication failure ($GITHUB_RUN_NUMBER)" --body-file failure.md
+      - name: Upload verified APK and JAR for privileged release publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: holdframe-verified-release-assets
+          path: |
+            release/HoldFrame-Android12-LowRAM.apk
+            release/HoldFrame-Desktop.jar
+          if-no-files-found: error
+          retention-days: 14
 
   report-build-failure:
     needs: [android, java, unified-release]

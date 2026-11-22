@@ -1,0 +1,95 @@
+name: HoldFrame publish tested APK and Java JAR
+on:
+  workflow_run:
+    workflows:
+      - HoldFrame Android APK and cross-platform executable Java JAR
+    types: [completed]
+permissions:
+  actions: read
+  contents: write
+  issues: write
+
+jobs:
+  publish:
+    # Only allow verified builds from this repository's main branch.
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download both verified application artifacts from completed build
+        uses: actions/download-artifact@v4
+        with:
+          name: holdframe-verified-release-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: release
+      - name: Verify exact application files and expected version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release/HoldFrame-Android12-LowRAM.apk
+          test -s release/HoldFrame-Desktop.jar
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 2
+          unzip -t release/HoldFrame-Android12-LowRAM.apk >/dev/null
+          unzip -t release/HoldFrame-Desktop.jar >/dev/null
+          unzip -p release/HoldFrame-Desktop.jar META-INF/MANIFEST.MF | tr -d '\r' | grep -q '^Main-Class: dev.rectifydata.holdframe.windows.HoldFrame'
+          expected="0.11.${{ github.event.workflow_run.run_number }}"
+          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -qx "$expected"
+      - name: Publish single GitHub prerelease containing APK and Java executable
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.HOLDFRAME_RELEASE_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          tag="v0.11.${{ github.event.workflow_run.run_number }}"
+          target="${{ github.event.workflow_run.head_sha }}"
+          notes="HoldFrame $tag: split poses at the playhead (Ctrl+B/Animate), split selected audio while preserving source offset, exact vector-lasso selection and undoable Edit/Delete, text transformations, update checks, and Windows/Linux shortcut creation. Direct assets: Android 12+ experimental APK and executable Java 17+ JAR for Windows/Linux. Android emulator install and launch verified in CI. The APK is debug-signed; back up projects before replacing a previously installed build."
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            created=0
+            for attempt in 1 2 3; do
+              if gh release create "$tag" --target "$target" \
+                  --title "HoldFrame $tag (Android APK + Java JAR)" \
+                  --notes "$notes" --prerelease; then
+                created=1
+                break
+              fi
+              gh release view "$tag" >/dev/null 2>&1 && { created=1; break; }
+              sleep $((attempt*10))
+            done
+            if test "$created" -ne 1; then
+              echo "::error::GitHub denied release creation; use a token with Contents: write in HOLDFRAME_RELEASE_TOKEN."
+              exit 1
+            fi
+          fi
+          for file in release/HoldFrame-Android12-LowRAM.apk release/HoldFrame-Desktop.jar; do
+            uploaded=0
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" "$file" --clobber; then
+                uploaded=1
+                break
+              fi
+              sleep $((attempt*10))
+            done
+            test "$uploaded" -eq 1 || { echo "::error::Unable to upload $file"; exit 1; }
+          done
+          while IFS= read -r old; do
+            case "$old" in
+              HoldFrame-Android12-LowRAM.apk|HoldFrame-Desktop.jar) ;;
+              *) gh release delete-asset "$tag" "$old" --yes ;;
+            esac
+          done < <(gh release view "$tag" --json assets --jq '.assets[].name')
+          gh release edit "$tag" --title "HoldFrame $tag (Android APK + Java JAR)" --notes "$notes" --prerelease
+          gh release view "$tag" --json assets --jq '.assets[].name' | sort > actual.txt
+          printf '%s\n' HoldFrame-Android12-LowRAM.apk HoldFrame-Desktop.jar > expected.txt
+          diff -u expected.txt actual.txt
+      - name: Report release failure with specific run ID
+        if: failure()
+        continue-on-error: true
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.HOLDFRAME_RELEASE_TOKEN || github.token }}
+        run: |
+          gh issue create --title "HoldFrame release permission or upload failed (${{ github.event.workflow_run.run_number }})" \
+             --body "Build passed for Android and Java but GitHub refused publication or an asset validation step failed. Build: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}. Publisher: ${{ github.server_url }}/${{ github.repository }}/actions/runs/$GITHUB_RUN_ID" || true
