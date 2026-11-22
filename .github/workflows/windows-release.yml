@@ -24,7 +24,7 @@ jobs:
           $src += @(Get-ChildItem core/src/test/java/dev/rectifydata/holdframe/core -Filter *.java | ForEach-Object { $_.FullName })
           & javac --release 17 -d build/tests @src
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          foreach ($test in @("CoreTest", "MediaCoreTest", "SequenceClipboardTest")) {
+          foreach ($test in @("CoreTest", "MediaCoreTest", "SequenceClipboardTest", "PressureStrokeTest")) {
             & java -cp build/tests ("dev.rectifydata.holdframe.core." + $test)
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -57,12 +57,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
           New-Item -ItemType Directory -Force build/version-meta/META-INF | Out-Null
-          Set-Content -Path build/version-meta/META-INF/holdframe-version.txt -Value "0.11.${{ github.run_number }}" -Encoding ascii
+          Set-Content -Path build/version-meta/META-INF/holdframe-version.txt -Value "0.12.${{ github.run_number }}" -Encoding ascii
           & jar --update --file dist/HoldFrame.jar -C build/version-meta META-INF/holdframe-version.txt
           if ($LASTEXITCODE -ne 0) { throw "Unable to stamp desktop version" }
-          & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version "0.11.${{ github.run_number }}" --vendor RectifyData --icon assets/HoldFrame.ico
+          & jpackage --type app-image --name HoldFrame --input dist --main-jar HoldFrame.jar --main-class dev.rectifydata.holdframe.windows.HoldFrame --dest packaged --app-version "0.12.${{ github.run_number }}" --vendor RectifyData --icon assets/HoldFrame.ico
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item dist/HoldFrame.jar release/HoldFrame.jar
       - name: Install NSIS build dependency
         shell: pwsh
         run: |
@@ -98,21 +97,21 @@ jobs:
         with:
           name: HoldFrame-Windows
           path: release/*
-      - name: Publish Windows installer and JAR GitHub prerelease
+      - name: Publish Windows native installer GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         shell: pwsh
         run: |
-          $tag = "windows-v0.11.${{ github.run_number }}"
-          foreach ($file in @("release/HoldFrame-Setup.exe","release/HoldFrame.jar")) {
+          $tag = "windows-v0.12.${{ github.run_number }}"
+          foreach ($file in @("release/HoldFrame-Setup.exe")) {
             if (-not (Test-Path $file) -or (Get-Item $file).Length -lt 1024) { throw "Missing or invalid release asset: $file" }
           }
-          $notes = "HoldFrame desktop preview. Windows installer has a visible setup wizard, optional shortcuts, and optional launch on Finish. Includes Escape to deselect and Keep My Brush Size (KMBS) across sessions. Cross-platform Java 17+ JAR also included."
+          $notes = "HoldFrame desktop native-installer preview. Interactive NSIS setup with visible progress, shortcuts, and optional launch after installation. Delete removes selected pose/audio clips, the black brush dot responds to expressive stroke width, and HFM5 saves pressure. Java is bundled; no standalone JAR is required."
           & gh release view $tag --repo $env:GH_REPO *> $null
           if ($LASTEXITCODE -eq 0) {
-            & gh release upload $tag release/HoldFrame-Setup.exe release/HoldFrame.jar --clobber --repo $env:GH_REPO
+            & gh release upload $tag release/HoldFrame-Setup.exe --clobber --repo $env:GH_REPO
           } else {
-            & gh release create $tag release/HoldFrame-Setup.exe release/HoldFrame.jar --target $env:GITHUB_SHA --title "HoldFrame $tag Windows setup" --notes $notes --prerelease --repo $env:GH_REPO
+            & gh release create $tag release/HoldFrame-Setup.exe --target $env:GITHUB_SHA --title "HoldFrame $tag Windows setup" --notes $notes --prerelease --repo $env:GH_REPO
           }
           if ($LASTEXITCODE -ne 0) { throw "GitHub Windows prerelease publication failed" }
