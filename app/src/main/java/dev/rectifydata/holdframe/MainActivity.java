@@ -136,6 +136,7 @@ public final class MainActivity extends Activity {
     private String selectedAudioClipId;
     private boolean timelineClipSelected;
     void selectAudioClip(String id) {
+        if(canvas!=null)canvas.deselectText();
         selectedAudioClipId=id;
         timelineClipSelected=false;
         selectedFrom=selectedTo=-1;
@@ -143,6 +144,7 @@ public final class MainActivity extends Activity {
     }
     String selectedAudioClipId(){return selectedAudioClipId;}
     void selectTimelineClip() {
+        if(canvas!=null)canvas.deselectText();
         selectedAudioClipId=null;
         timelineClipSelected=true;
         selectedFrom=selectedTo=selected;
