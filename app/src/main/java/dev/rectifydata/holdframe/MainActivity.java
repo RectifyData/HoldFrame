@@ -133,6 +133,43 @@ public final class MainActivity extends Activity {
     }
     private Model.ClipboardSequence clipboard;
     private int selectedFrom=-1, selectedTo=-1;
+    private String selectedAudioClipId;
+    private boolean timelineClipSelected;
+    void selectAudioClip(String id) {
+        selectedAudioClipId=id;
+        timelineClipSelected=false;
+        selectedFrom=selectedTo=-1;
+        refresh();
+    }
+    String selectedAudioClipId(){return selectedAudioClipId;}
+    void selectTimelineClip() {
+        selectedAudioClipId=null;
+        timelineClipSelected=true;
+        selectedFrom=selectedTo=selected;
+        refresh();
+    }
+    private void deleteSelection() {
+        if(canvas!=null && canvas.selectedTextIndex()>=0) {deleteSelectedText();return;}
+        if(selectedAudioClipId!=null) {deleteAudioClip(selectedAudioClipId);return;}
+        if(timelineClipSelected) {delete();return;}
+        toast("Select a drawing, audio clip or text to delete");
+    }
+    private void deleteAudioClip(String id) {
+        if(id==null)return;
+        stopPlayback();
+        Model.AudioClip removed=null;
+        for(int i=0;i<model.audioClips.size();i++)
+            if(id.equals(model.audioClips.get(i).id)) {removed=model.audioClips.remove(i);break;}
+        selectedAudioClipId=null;
+        if(removed==null)return;
+        boolean used=false;
+        for(Model.AudioClip clip:model.audioClips)
+            if(clip.sourcePath.equals(removed.sourcePath)){used=true;break;}
+        File file=new File(removed.sourcePath);
+        File folder=new File(getFilesDir(),"audio");
+        if(!used && folder.equals(file.getParentFile()))file.delete();
+        releaseAudio();changed();
+    }
     private Model.Project model = new Model.Project();
     private DrawingView canvas;
     private TimelineView timeline;
@@ -736,6 +773,7 @@ public final class MainActivity extends Activity {
     }
     private void deselectAll() {
         selectedFrom=selectedTo=-1;
+        selectedAudioClipId=null;timelineClipSelected=false;
         if(canvas!=null)canvas.deselectText();
         if(timeline!=null)timeline.invalidate();
     }
@@ -864,7 +902,7 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_S: saveDocument();return true;
                 case KeyEvent.KEYCODE_Z: undo();return true;
                 case KeyEvent.KEYCODE_T: toggleTextTransformMode();return true;
-                case KeyEvent.KEYCODE_DEL: deleteSelectedText();return true;
+                case KeyEvent.KEYCODE_DEL: deleteSelection();return true;
                 case KeyEvent.KEYCODE_EQUALS:
                 case KeyEvent.KEYCODE_PLUS: canvas.changeZoom(1.25f);return true;
                 case KeyEvent.KEYCODE_MINUS: canvas.changeZoom(.8f);return true;
@@ -877,6 +915,8 @@ public final class MainActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_LEFT: seek(currentFrame-1);return true;
                 case KeyEvent.KEYCODE_DPAD_RIGHT: seek(currentFrame+1);return true;
                 case KeyEvent.KEYCODE_SPACE: togglePlayback();return true;
+                case KeyEvent.KEYCODE_FORWARD_DEL: deleteSelection();return true;
+                case KeyEvent.KEYCODE_DEL: deleteSelection();return true;
                 default: break;
             }
             if(keymapProfile==1) {

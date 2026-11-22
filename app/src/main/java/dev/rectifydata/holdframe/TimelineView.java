@@ -158,6 +158,12 @@ public final class TimelineView extends View {
             if (right<0 || left>getWidth()) continue;
             paint.setColor(clip.muted?Color.rgb(98,113,121):Color.rgb(41,146,123));
             canvas.drawRoundRect(left,dp(109),right,dp(136),dp(4),dp(4),paint);
+            if(clip.id.equals(editor.selectedAudioClipId())) {
+                paint.setColor(Color.WHITE);paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(dp(2));
+                canvas.drawRoundRect(left,dp(109),right,dp(136),dp(4),dp(4),paint);
+                paint.setStyle(Paint.Style.FILL);
+            }
         }
         float head=dp(12)+editor.currentFrame()*unit;
         paint.setColor(Color.rgb(255,187,78));
@@ -179,6 +185,16 @@ public final class TimelineView extends View {
                     float edge=dp(12)+cursor*unit;
                     float delta=Math.abs(event.getX()-edge);
                     if(delta<nearest) {nearest=delta;resizing=i;}
+                }
+            }
+            if(event.getY()>=dp(109) && event.getY()<=dp(136)) {
+                for(int i=editor.project().audioClips.size()-1;i>=0;i--) {
+                    Model.AudioClip clip=editor.project().audioClips.get(i);
+                    float left=dp(12)+clip.startFrame*unit,right=dp(12)+clip.endFrame()*unit;
+                    if(event.getX()>=left && event.getX()<=right) {
+                        editor.selectAudioClip(clip.id);
+                        return true;
+                    }
                 }
             }
             if(resizing<0 && event.getY()<dp(102))seeking=true;
@@ -206,7 +222,10 @@ public final class TimelineView extends View {
             return true;
         }
         if(type==MotionEvent.ACTION_UP || type==MotionEvent.ACTION_CANCEL) {
-            if(trackingPointer && type==MotionEvent.ACTION_UP)applyDragX(event.getX());
+            if(trackingPointer && type==MotionEvent.ACTION_UP) {
+                applyDragX(event.getX());
+                editor.selectTimelineClip();
+            }
             stopAutoScroll();
             resizing=-1;seeking=false;
             refresh();
