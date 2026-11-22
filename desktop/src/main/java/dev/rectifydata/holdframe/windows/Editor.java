@@ -565,6 +565,7 @@ public final class Editor extends JFrame {
         shortcut("Undo","control Z",this::undo);
         shortcut("Redo","control Y",this::redo);
         shortcut("Select objects","control A",this::selectAll);
+        shortcut("Deselect","ESCAPE",this::deselectAll);
         shortcut("Delete selected objects","DELETE",this::deleteSelectedObjects);
         shortcut("Select timeline","control shift A",this::selectAllTimeline);
         shortcut("Copy poses","control C",this::copyFrame);
@@ -586,6 +587,13 @@ public final class Editor extends JFrame {
         shortcut("Zoom in","control EQUALS",()->stage.zoomBy(1.25f));
         shortcut("Zoom out","control MINUS",()->stage.zoomBy(.8f));
         shortcut("Fit canvas","control 0",()->stage.zoomReset());
+    }
+    private void deselectAll() {
+        stage.clearSelection();
+        rangeAnchor=rangeStart=rangeEnd=-1;
+        selectedAudioId=null;
+        stage.invalidateDrawing();
+        refresh();
     }
     private void chooseTool(CanvasView.Tool tool,JToggleButton button) {
         stage.setTool(tool);
@@ -859,13 +867,25 @@ public final class Editor extends JFrame {
             if (choice!=null) { stage.setInk(choice); pen.setSelected(true); stage.setTool(CanvasView.Tool.PEN); }
         });
         tools.add(color);
-        JSlider brush = new JSlider(1,30,6);
+        final Preferences brushPrefs=Preferences.userNodeForPackage(Editor.class).node("brush");
+        final JCheckBox keepBrush=new JCheckBox("KMBS",brushPrefs.getBoolean("keep",true));
+        keepBrush.setToolTipText("Keep My Brush Size across sessions");
+        JSlider brush = new JSlider(1,30,keepBrush.isSelected()?Math.max(1,Math.min(30,brushPrefs.getInt("size",6))):6);
         brush.setPreferredSize(new Dimension(95,26));
         brush.setMinimumSize(new Dimension(75,26));
         brush.setMaximumSize(new Dimension(105,30));
-        brush.addChangeListener(e -> stage.setBrush(brush.getValue()));
+        stage.setBrush(brush.getValue());
+        brush.addChangeListener(e -> {
+            stage.setBrush(brush.getValue());
+            if(keepBrush.isSelected())brushPrefs.putInt("size",brush.getValue());
+        });
+        keepBrush.addActionListener(e->{
+            brushPrefs.putBoolean("keep",keepBrush.isSelected());
+            if(keepBrush.isSelected())brushPrefs.putInt("size",brush.getValue());
+        });
         tools.add(new JLabel("Size"));
         tools.add(brush);
+        tools.add(keepBrush);
         JCheckBox onion = new JCheckBox("Onion",true);
         onion.setOpaque(false);
         onion.setToolTipText("Toggle translucent neighboring poses");
