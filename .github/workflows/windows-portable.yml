@@ -1,7 +1,5 @@
 name: HoldFrame Windows portable CI
 on:
-  push:
-    branches: [windows]
   workflow_dispatch:
 permissions:
   contents: write

@@ -25,7 +25,7 @@ jobs:
           for test in CoreTest MediaCoreTest SequenceClipboardTest ReleaseCheckerTest TextTransformMathTest TextTransformProjectTest SplitExposureTest SplitAudioTest PressureStrokeTest; do
             java -cp build/classes dev.rectifydata.holdframe.core."$test"
           done
-          for test in LassoTest LassoPartialTest CanvasZoomTest ExportSupportTest FontSupportTest ShortcutSupportTest; do
+          for test in LassoTest LassoPartialTest CanvasZoomTest ExportSupportTest FontSupportTest ShortcutSupportTest NativeInstallerUpdaterTest; do
             java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows."$test"
           done
           for test in DesktopFeatureTest TextAndFourHandleTest TimelineAutoScrollTest TimelineDragAndLayoutTest FeatureTabsAndKeymapTest SequenceClipboardGuiTest MediaFeatureTest ExportMenuGuiTest SelectionAndCursorTest; do
