@@ -139,3 +139,12 @@ The low-RAM action bar remains compact: Split stays in Animate's More menu.
 audio clip, and put the playhead within the clip. No audio samples are copied;
 the new second clip resumes at the matching source offset and keeps
 volume/mute settings.
+
+
+## v0.12 — stylus pressure and clip deletion
+
+- **Stylus pressure:** compatible Android pens use MotionEvent pressure to vary the width of a brush stroke. Finger strokes keep the chosen brush size, and the drawing contains saved per-point width samples.
+- **Black brush dot:** the touch/stylus pointer preview changes diameter with the current pressure.
+- **Delete key:** tap an audio clip or timeline pose to select it, then use Delete on a hardware keyboard; a selected text element can also be deleted. Esc clears the selection.
+- **HFM5:** new projects save pressure data in the shared format, while old HFM1–HFM4 projects still open. Older app releases cannot necessarily read newly saved HFM5 projects; make backups before updating.
+- **In-app updating:** the app downloads the official Android APK with progress and asks Android to show its normal installation confirmation. Installing updates is never silent.
