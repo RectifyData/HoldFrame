@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           gradle --no-daemon --console=plain :app:assembleDebug \
-            -PreleaseVersion="0.11.$GITHUB_RUN_NUMBER" \
+            -PreleaseVersion="0.12.$GITHUB_RUN_NUMBER" \
             -PbuildNumber="$((9000 + GITHUB_RUN_NUMBER))" 2>&1 | tee android-build.log
           test -s app/build/outputs/apk/debug/app-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
@@ -217,6 +217,7 @@ jobs:
           set -euo pipefail
           javac --release 17 -cp build/classes -d build/classes core/src/test/java/dev/rectifydata/holdframe/core/*.java desktop/src/test/java/dev/rectifydata/holdframe/windows/*.java
           java -cp build/classes dev.rectifydata.holdframe.core.CoreTest
+          java -cp build/classes dev.rectifydata.holdframe.core.PressureStrokeTest
           java -cp build/classes dev.rectifydata.holdframe.core.MediaCoreTest
           java -cp build/classes dev.rectifydata.holdframe.core.SequenceClipboardTest
           java -cp build/classes dev.rectifydata.holdframe.core.ReleaseCheckerTest
@@ -224,6 +225,7 @@ jobs:
           java -cp build/classes dev.rectifydata.holdframe.core.TextTransformProjectTest
           java -cp build/classes dev.rectifydata.holdframe.core.SplitExposureTest
           java -cp build/classes dev.rectifydata.holdframe.core.SplitAudioTest
+          java -cp build/classes dev.rectifydata.holdframe.core.PressureStrokeTest
           java -cp build/classes dev.rectifydata.holdframe.windows.LassoPartialTest
           java -cp build/classes dev.rectifydata.holdframe.windows.ShortcutSupportTest
           java -Djava.awt.headless=true -cp build/classes dev.rectifydata.holdframe.windows.CanvasZoomTest
@@ -240,9 +242,9 @@ jobs:
           mkdir -p release
           cp dist/HoldFrame.jar release/HoldFrame-Desktop.jar
           mkdir -p build/version-meta/META-INF
-          printf '0.11.%s\n' "$GITHUB_RUN_NUMBER" > build/version-meta/META-INF/holdframe-version.txt
+          printf '0.12.%s\n' "$GITHUB_RUN_NUMBER" > build/version-meta/META-INF/holdframe-version.txt
           jar --update --file release/HoldFrame-Desktop.jar -C build/version-meta META-INF/holdframe-version.txt
-          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -q "^0.11.$GITHUB_RUN_NUMBER$"
+          unzip -p release/HoldFrame-Desktop.jar META-INF/holdframe-version.txt | grep -q "^0.12.$GITHUB_RUN_NUMBER$"
       - uses: actions/upload-artifact@v4
         with:
           name: holdframe-build-java
