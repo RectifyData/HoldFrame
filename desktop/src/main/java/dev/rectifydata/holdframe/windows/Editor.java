@@ -693,37 +693,7 @@ public final class Editor extends JFrame {
         return "0.9.0";
     }
     private void checkUpdates(boolean manual) {
-        if(manual && status!=null)status.setText("Checking GitHub releases...");
-        new SwingWorker<ReleaseChecker.Release,Void>() {
-            private Exception error;
-            @Override protected ReleaseChecker.Release doInBackground(){
-                try {return ReleaseChecker.check();}
-                catch(Exception e){error=e;return null;}
-            }
-            @Override protected void done(){
-                if(!isDisplayable())return;
-                if(error!=null){
-                    if(manual)JOptionPane.showMessageDialog(Editor.this,
-                        "Cannot check for updates: "+error.getMessage(),"HoldFrame Updates",JOptionPane.WARNING_MESSAGE);
-                    refresh();return;
-                }
-                try {
-                    ReleaseChecker.Release release=get();
-                    String current=appVersion();
-                    if(release!=null && release.newerThan(current)){
-                        int choice=JOptionPane.showConfirmDialog(Editor.this,
-                            "HoldFrame "+release.tag+" is available (installed: "+current+").\nOpen the GitHub release page?",
-                            "HoldFrame update available",JOptionPane.YES_NO_OPTION);
-                        if(choice==JOptionPane.YES_OPTION){
-                            try {java.awt.Desktop.getDesktop().browse(java.net.URI.create(release.page));}
-                            catch(Exception ex){JOptionPane.showMessageDialog(Editor.this,release.page);}
-                        }
-                    } else if(manual)JOptionPane.showMessageDialog(Editor.this,
-                        "HoldFrame is up to date ("+current+")","HoldFrame Updates",JOptionPane.INFORMATION_MESSAGE);
-                } catch(Exception e){if(manual)JOptionPane.showMessageDialog(Editor.this,e.toString());}
-                refresh();
-            }
-        }.execute();
+        NativeInstallerUpdater.check(this,appVersion(),manual);
     }
     private JMenuBar buildMenu() {
         JMenuBar bar = new JMenuBar();
