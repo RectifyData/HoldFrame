@@ -218,3 +218,16 @@ shortcut choices and an optional launch on Finish. No silent installation.
 inside it, then use **Media → Split audio** or **Edit → Split selected audio
 at playhead**. The second piece retains the same source file, volume and mute
 settings, and picks up from the exact corresponding source offset.
+
+
+## v0.12 — native installers and expressive brushes
+
+HoldFrame now ships **native installation packages** rather than asking users to launch a JAR. Windows provides a visible NSIS setup wizard with shortcuts, an embedded Java runtime and an optional launch on Finish. Linux provides an installable **.deb** with a system menu shortcut and bundled runtime. Developer builds still compile Java internally.
+
+**File → Check for updates** now searches for the platform-specific installer release, downloads it with visible progress and offers to open the operating system installer. Nothing installs silently.
+
+Select an **audio clip or a drawing exposure on the timeline** and press **Delete** to remove it. Delete retains priority for selected canvas objects when they exist, and the final exposure cannot be removed. Press **Esc** to deselect.
+
+The pen/eraser pointer is now a small **black brush dot** with a contrasting edge. Its diameter follows brush width and the expressive-width fallback on desktop. Java Swing/AWT does not expose physical stylus pressure, so desktop mouse input varies stroke thickness using movement speed; Android styluses use actual pressure from the device.
+
+**HFM5** saves per-point pressure data and opens older project files (HFM1 through HFM4). Versions released before HFM5 cannot necessarily reopen projects saved by this version. Keep backups before replacing an older installation.

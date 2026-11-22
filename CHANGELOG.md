@@ -1,3 +1,12 @@
+## v0.12 — native packages and pressure-aware drawing
+
+- Replaced the user-facing JAR download with a native Windows setup and Linux Debian installer, both with bundled Java.
+- Added a black, brush-sized pointer dot; expressive stroke weight changes while drawing (speed-derived on desktop, native stylus pressure on Android).
+- Pressing Delete on a selected timeline exposure or audio clip now removes that clip. Esc clears selections.
+- Project format HFM5 preserves pressure samples while continuing to open older files.
+- Desktop update checks now find and download the appropriate installer, show progress and let the operating system display its normal installation UI.
+- Added regression tests for deletion, pointer display, pressure persistence and native-update selection.
+
 ## v0.5.0 — Exports, without changing how projects store animation
 
 - Added desktop **Export…** to the toolbar, File menu and Ctrl+E.
