@@ -18,6 +18,7 @@ public final class ProjectIO {
     private static final int MAGIC_V2 = 0x48464D32; // HFM2 (editable text)
     private static final int MAGIC_V3 = 0x48464D33; // HFM3 (audio references)
     private static final int MAGIC_V4 = 0x48464D34; // HFM4 (image assets)
+    private static final int MAGIC_V5 = 0x48464D35; // HFM5 (per-point pen pressure)
     private ProjectIO() {}
     /** The supplied output stream remains open. */
     public static void write(Model.Project project, OutputStream stream) throws IOException {
@@ -27,7 +28,7 @@ public final class ProjectIO {
         project.validate();
         GZIPOutputStream gzip = new GZIPOutputStream(new BufferedOutputStream(stream));
         DataOutputStream out = new DataOutputStream(gzip);
-        out.writeInt(MAGIC_V4);
+        out.writeInt(MAGIC_V5);
         out.writeInt(project.fps);
         out.writeInt(project.drawings.size());
         for (Model.Drawing drawing : project.drawings.values()) {
@@ -38,9 +39,11 @@ public final class ProjectIO {
                 out.writeFloat(stroke.width);
                 out.writeBoolean(stroke.eraser);
                 out.writeInt(stroke.points.size());
-                for (Model.Point point : stroke.points) {
+                for (int k=0;k<stroke.points.size();k++) {
+                    Model.Point point=stroke.points.get(k);
                     out.writeFloat(point.x);
                     out.writeFloat(point.y);
+                    out.writeFloat(stroke.pressures.isEmpty()?1f:stroke.pressures.get(k));
                 }
             }
             out.writeInt(drawing.texts.size());
@@ -95,7 +98,7 @@ public final class ProjectIO {
     public static Model.Project read(InputStream stream, Path projectDirectory) throws IOException {
         DataInputStream in = new DataInputStream(new GZIPInputStream(new BufferedInputStream(stream)));
         int magic = in.readInt();
-        if (magic != MAGIC_V1 && magic != MAGIC_V2 && magic != MAGIC_V3 && magic != MAGIC_V4)
+        if (magic != MAGIC_V1 && magic != MAGIC_V2 && magic != MAGIC_V3 && magic != MAGIC_V4 && magic != MAGIC_V5)
             throw new IOException("Not a supported HoldFrame project");
         Model.Project result = new Model.Project(false);
         result.fps = in.readInt();
@@ -111,11 +114,13 @@ public final class ProjectIO {
                 int points = count(in.readInt(), 1, 100_000, "points");
                 totalPoints += points;
                 if (totalPoints > 500_000) throw new IOException("Project point limit exceeded");
-                for (int k = 0; k < points; k++)
+                for (int k = 0; k < points; k++) {
                     s.points.add(new Model.Point(in.readFloat(), in.readFloat()));
+                    if(magic==MAGIC_V5) s.pressures.add(in.readFloat());
+                }
                 d.strokes.add(s);
             }
-            if (magic == MAGIC_V2 || magic == MAGIC_V3 || magic == MAGIC_V4) {
+            if (magic == MAGIC_V2 || magic == MAGIC_V3 || magic == MAGIC_V4 || magic == MAGIC_V5) {
                 int textCount = count(in.readInt(), 0, 20_000, "text elements");
                 for (int j = 0; j < textCount; j++) {
                     Model.TextItem t=new Model.TextItem(in.readUTF(),in.readUTF(),in.readUTF(),
@@ -124,7 +129,7 @@ public final class ProjectIO {
                     d.texts.add(t);
                 }
             }
-            if (magic == MAGIC_V4) {
+            if (magic == MAGIC_V4 || magic == MAGIC_V5) {
                 int imageCount=count(in.readInt(),0,10_000,"image placements");
                 for (int j=0;j<imageCount;j++)
                     d.images.add(new Model.ImageItem(in.readUTF(),in.readFloat(),in.readFloat(),
@@ -135,7 +140,7 @@ public final class ProjectIO {
         int clips = count(in.readInt(), 1, Model.MAX_EXPOSURES, "exposures");
         for (int i = 0; i < clips; i++)
             result.timeline.add(new Model.Exposure(in.readUTF(), in.readInt()));
-        if (magic == MAGIC_V3 || magic == MAGIC_V4) {
+        if (magic == MAGIC_V3 || magic == MAGIC_V4 || magic == MAGIC_V5) {
             int count = count(in.readInt(), 0, 128, "audio clips");
             for (int i = 0; i < count; i++) {
                 String id=in.readUTF();
@@ -147,7 +152,7 @@ public final class ProjectIO {
                 result.audioClips.add(clip);
             }
         }
-        if (magic == MAGIC_V4) {
+        if (magic == MAGIC_V4 || magic == MAGIC_V5) {
             int assets=count(in.readInt(),0,256,"image assets");
             long total=0;
             for (int i=0;i<assets;i++) {

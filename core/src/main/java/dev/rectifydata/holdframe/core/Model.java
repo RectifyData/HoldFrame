@@ -26,12 +26,15 @@ public final class Model {
         public float width;
         public boolean eraser;
         public final List<Point> points = new ArrayList<>();
+        /** Optional normalized widths, one per point; empty on legacy strokes. */
+        public final List<Float> pressures = new ArrayList<>();
         public Stroke(int color, float width, boolean eraser) {
             this.color = color; this.width = width; this.eraser = eraser;
         }
         public Stroke copy() {
             Stroke s = new Stroke(color, width, eraser);
             s.points.addAll(points); // immutable Point values
+            s.pressures.addAll(pressures);
             return s;
         }
     }
@@ -428,6 +431,10 @@ public final class Model {
                     if (!(s.width > 0 && s.width <= 200) || !Float.isFinite(s.width)
                             || s.points.size() < 1 || s.points.size() > 100_000)
                         throw new IllegalArgumentException("Invalid stroke");
+                    if(!s.pressures.isEmpty() && s.pressures.size()!=s.points.size())
+                        throw new IllegalArgumentException("Stroke pressure count mismatch");
+                    for(float pressure:s.pressures) if(!Float.isFinite(pressure)||pressure<0.1f||pressure>2f)
+                        throw new IllegalArgumentException("Invalid stroke pressure");
                     points += s.points.size();
                     if (points > 500_000) throw new IllegalArgumentException("Too many points");
                     for (Point p : s.points) {
