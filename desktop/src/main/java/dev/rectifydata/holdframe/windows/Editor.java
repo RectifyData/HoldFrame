@@ -516,6 +516,23 @@ public final class Editor extends JFrame {
             markDirty(); refresh(); return;
         }
     }
+    private void splitSelectedAudio() {
+        stopPlayback();
+        if(selectedAudioId==null) {
+            status.setText("Select an audio clip on the timeline first");return;
+        }
+        try {
+            Model.AudioClip next=model.splitAudioClip(selectedAudioId,frame);
+            selectedAudioId=next.id;
+            audio.stopAll();
+            markDirty();
+            refresh();
+            timeline.revealFrame(frame);
+            status.setText("Audio split at frame "+(frame+1)+" — playback offset preserved");
+        } catch(IllegalArgumentException|IllegalStateException ex) {
+            status.setText("Cannot split audio: "+ex.getMessage());
+        }
+    }
     private void deleteAudio() {
         if (selectedAudioId==null) return;
         stopPlayback();
@@ -709,6 +726,7 @@ public final class Editor extends JFrame {
         item(edit,"Delete selected objects (Del)",this::deleteSelectedObjects);
         item(edit,"Import image…",this::importImage);
         item(edit,"Delete selected audio clip",this::deleteAudio);
+        item(edit,"Split selected audio at playhead",this::splitSelectedAudio);
         item(edit,"Copy selected poses (Ctrl+C)",this::copyFrame);
         item(edit,"Paste poses (Ctrl+V)",this::pasteFrame);
         item(edit,"Select all timeline poses (Ctrl+Shift+A)",this::selectAllTimeline);
@@ -807,6 +825,7 @@ public final class Editor extends JFrame {
         mediaTab.add(button("+ Image",this::importImage));
         mediaTab.add(button("+ Audio",this::importAudio));
         mediaTab.add(button("Remove audio",this::deleteAudio));
+        mediaTab.add(button("Split audio",this::splitSelectedAudio));
         featureTabs.addTab("Media",mediaTab);
         featureTabs.setSelectedIndex(1);
         layout.add(featureTabs,BorderLayout.NORTH);
