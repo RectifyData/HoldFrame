@@ -23,24 +23,60 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Compile desktop and regression tests
-        id: build
+      - name: Compile Windows desktop source
+        id: compile
         shell: pwsh
         run: |
-          ./build.ps1
-          if ($LASTEXITCODE -ne 0) { throw "Desktop compile failed" }
-          New-Item -ItemType Directory -Force build/tests | Out-Null
-          $tests = @(Get-ChildItem core/src/test/java/dev/rectifydata/holdframe/core -Filter *.java | ForEach-Object { $_.FullName })
-          $tests += @(Get-ChildItem desktop/src/test/java/dev/rectifydata/holdframe/windows -Filter *.java | ForEach-Object { $_.FullName })
-          & javac --release 17 -cp build/classes -d build/tests @tests
-          if ($LASTEXITCODE -ne 0) { throw "Test compile failed" }
-          foreach ($test in @("CoreTest","PressureStrokeTest","ReleaseCheckerTest")) {
-            & java -cp "build/classes;build/tests" ("dev.rectifydata.holdframe.core." + $test)
-            if ($LASTEXITCODE -ne 0) { throw "Core test failed: $test" }
+          Start-Transcript -Path desktop-compile.log -Force | Out-Null
+          try {
+            ./build.ps1
+            if ($LASTEXITCODE -ne 0) { throw "Desktop source build failed, exit $LASTEXITCODE" }
+            if (-not (Test-Path dist/HoldFrame.jar)) { throw "Desktop JAR missing" }
+          } finally {
+            Stop-Transcript | Out-Null
           }
-          foreach ($test in @("NativeInstallerUpdaterTest","ExportSupportTest","LassoTest")) {
+      - name: Compile all desktop test sources
+        id: testscompile
+        shell: pwsh
+        run: |
+          Start-Transcript -Path desktop-tests-compile.log -Force | Out-Null
+          try {
+            New-Item -ItemType Directory -Force build/tests | Out-Null
+            $tests = @(Get-ChildItem core/src/test/java/dev/rectifydata/holdframe/core -Filter *.java | ForEach-Object { $_.FullName })
+            $tests += @(Get-ChildItem desktop/src/test/java/dev/rectifydata/holdframe/windows -Filter *.java | ForEach-Object { $_.FullName })
+            & javac --release 17 -encoding UTF-8 -cp build/classes -d build/tests @tests
+            if ($LASTEXITCODE -ne 0) { throw "Desktop tests did not compile; javac exit $LASTEXITCODE" }
+          } finally {
+            Stop-Transcript | Out-Null
+          }
+      - name: Run core regression tests
+        id: coretests
+        shell: pwsh
+        run: |
+          foreach ($test in @("CoreTest","PressureStrokeTest","ReleaseCheckerTest")) {
+            Write-Host "Running $test"
+            & java -cp "build/classes;build/tests" ("dev.rectifydata.holdframe.core." + $test)
+            if ($LASTEXITCODE -ne 0) { throw "Core test failed: $test exit $LASTEXITCODE" }
+          }
+      - name: Run updater and lasso regression tests
+        id: uitests
+        shell: pwsh
+        run: |
+          foreach ($test in @("NativeInstallerUpdaterTest","LassoTest")) {
+            Write-Host "Running $test"
             & java -Djava.awt.headless=true -cp "build/classes;build/tests" ("dev.rectifydata.holdframe.windows." + $test)
-            if ($LASTEXITCODE -ne 0) { throw "Desktop test failed: $test" }
+            if ($LASTEXITCODE -ne 0) { throw "Desktop test failed: $test exit $LASTEXITCODE" }
+          }
+      - name: Run media export regression tests
+        id: exporttests
+        shell: pwsh
+        run: |
+          Start-Transcript -Path desktop-export-test.log -Force | Out-Null
+          try {
+            & java -Djava.awt.headless=true -cp "build/classes;build/tests" dev.rectifydata.holdframe.windows.ExportSupportTest
+            if ($LASTEXITCODE -ne 0) { throw "ExportSupportTest failed with exit $LASTEXITCODE" }
+          } finally {
+            Stop-Transcript | Out-Null
           }
       - uses: actions/setup-python@v5
         with:
@@ -176,8 +212,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          $status = "Compile=${{ steps.build.outcome }}, Icon=${{ steps.icon.outcome }}, Installer=${{ steps.installer.outcome }}, Artifact=${{ steps.artifact.outcome }}, Publish=${{ steps.publish.outcome }}"
+          $status = "Compile=${{ steps.compile.outcome }}, TestCompile=${{ steps.testscompile.outcome }}, Core=${{ steps.coretests.outcome }}, UI=${{ steps.uitests.outcome }}, Export=${{ steps.exporttests.outcome }}, Icon=${{ steps.icon.outcome }}, Installer=${{ steps.installer.outcome }}, Artifact=${{ steps.artifact.outcome }}, Publish=${{ steps.publish.outcome }}"
           Write-Host "FAILED WORKFLOW STEPS: $status"
           $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
           $body = "HoldFrame Windows v0.12.31 failed." + [Environment]::NewLine + "Run: $runUrl" + [Environment]::NewLine + "Steps: $status" + [Environment]::NewLine + "Inspect the first error in the failing step."
+          foreach ($file in @("desktop-compile.log","desktop-tests-compile.log","desktop-export-test.log")) {
+            if (Test-Path $file) {
+              $excerpt = (Get-Content $file -Tail 65 | Out-String)
+              if ($excerpt.Length -gt 7000) { $excerpt = $excerpt.Substring($excerpt.Length-7000) }
+              $body += [Environment]::NewLine + "Log $file:" + [Environment]::NewLine + "~~~" + [Environment]::NewLine + $excerpt + [Environment]::NewLine + "~~~"
+            }
+          }
           & gh issue create --repo $env:GH_REPO --title "HoldFrame Windows v0.12.31 installer build failed" --body $body
+
